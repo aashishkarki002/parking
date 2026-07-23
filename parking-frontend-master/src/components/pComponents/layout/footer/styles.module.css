@@ -1,0 +1,15 @@
+.container {
+    font-weight: bold;
+    text-align: center;
+    padding: 10px;
+    background-color: #ece9e6;
+    color: #3e1014;
+    font-size: 12px;
+}
+
+@media print {
+    .container {
+        display: none;
+    }
+}
+

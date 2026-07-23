@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .header { background-color: #f5f5f5; padding: 20px; text-align: center; }
+        .content { padding: 20px; }
+        .footer { margin-top: 20px; padding: 10px; text-align: center; font-size: 0.8em; color: #666; }
+        .pass-details { margin: 20px 0; padding: 15px; border: 1px solid #ddd; background-color: #f9f9f9; }
+        .detail-row { display: flex; margin-bottom: 10px; }
+        .detail-label { font-weight: bold; width: 150px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Your Parking Pass</h1>
+    </div>
+
+    <div class="content">
+        <p>Dear {{ staff.name }},</p>
+
+        <p>Your parking pass has been issued and is attached to this email as a PDF. You can print this pass and display it in your vehicle when parking.</p>
+
+        <div class="pass-details">
+            <h3>Pass Details</h3>
+            <div class="detail-row">
+                <span class="detail-label">Name:</span>
+                <span>{{ staff.name }}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">License Plate:</span>
+                <span>{{ staff.license_plate }}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Valid From:</span>
+                <span>{{ pass.valid_from|date:"F j, Y" }}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Valid Until:</span>
+                <span>{{ pass.valid_until|date:"F j, Y" }}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Status:</span>
+                <span>{% if pass.is_active %}Active{% else %}Inactive{% endif %}</span>
+            </div>
+        </div>
+
+        <p>If you have any questions about your parking pass, please contact the parking administrator.</p>
+    </div>
+
+    <div class="footer">
+        <p>This email was sent on {{ now }}.</p>
+    </div>
+</body>
+</html>

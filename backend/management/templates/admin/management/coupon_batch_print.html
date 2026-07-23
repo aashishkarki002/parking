@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Print Coupon QR Codes</title>
+    <script>
+        window.onload = function() {
+            // Auto-print when page loads
+            setTimeout(function() {
+                window.print();
+                // Close window after printing (optional)
+                setTimeout(function() {
+                    window.close();
+                }, 1000);
+            }, 500);
+        };
+    </script>
+    <style>
+        @page {
+            size: letter;
+            margin: 0;
+        }
+        body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+        }
+        .print-container {
+            width: 100%;
+            height: 100%;
+        }
+        iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="print-container">
+        <iframe src="{{ pdf_url }}"></iframe>
+    </div>
+</body>
+</html>

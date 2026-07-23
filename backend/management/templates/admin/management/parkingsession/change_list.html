@@ -1,0 +1,45 @@
+{% extends "admin/change_list.html" %}
+{% load i18n admin_urls static %}
+
+{# Override the result_list block to add our summary box after the table #}
+{% block result_list %}
+
+    {% if show_last_six_months_note %}
+        <p class="paginator" style="margin-bottom: 10px; color: #666;">
+            Showing sessions from the <strong>last 6 months</strong>. Use the <strong>Entry time</strong> or <strong>Exit time</strong> filter to see older or different date ranges.
+        </p>
+    {% endif %}
+
+    {# First, render the original results table. This is essential! #}
+    {{ block.super }}
+
+    {# Now, add our custom summary section at the end if we have totals #}
+    {% if summary_totals %}
+        <div style="padding: 15px; margin-top: 20px; background-color: #f7f7f7; border: 1px solid #ddd; border-radius: 4px; max-width: 400px;">
+<!--            <h3 style="margin-top: 0;">Page Totals</h3>-->
+            <table style="width: 100%;">
+                <tbody>
+<!--                    <tr style="font-size: 1.1em;">-->
+<!--                        <td style="padding: 4px 0;"><strong>Total Gross Charge:</strong></td>-->
+<!--                        <td style="text-align: right; padding: 4px 0;">-->
+<!--                            {{ currency_symbol }}{{ summary_totals.total_gross|floatformat:2|default:"0.00" }}-->
+<!--                        </td>-->
+<!--                    </tr>-->
+<!--                    <tr style="font-size: 1.1em; color: #a94442;">-->
+<!--                        <td style="padding: 4px 0;"><strong>Total Discount:</strong></td>-->
+<!--                        <td style="text-align: right; padding: 4px 0;">-->
+<!--                            -{{ currency_symbol }}{{ summary_totals.total_discount|floatformat:2|default:"0.00" }}-->
+<!--                        </td>-->
+<!--                    </tr>-->
+                    <tr style="font-size: 1.2em; font-weight: bold;">
+                        <td style="padding: 8px 0 0 0;"><strong>Total Charged Amount:</strong></td> {# <-- Changed "Net" to "Calculated" #}
+                        <td style="text-align: right; padding: 8px 0 0 0;">
+                            {{ currency_symbol }}{{ summary_totals.total_net|floatformat:2|default:"0.00" }}
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    {% endif %}
+
+{% endblock %}

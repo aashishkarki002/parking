@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{{ staff.name }} - Parking Pass</title>
+    <style>
+        @page {
+            size: auto;
+            margin: 0;
+        }
+
+        /* Reset everything to ensure consistency across printers */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html, body {
+            width: auto;
+            height: auto;
+            background: #fff;
+            color: #000;
+            -webkit-print-color-adjust: exact;
+        }
+
+        body {
+            font-family: 'DejaVu Sans Mono', 'Courier New', monospace;
+            font-size: 10pt;
+            padding: 4mm;
+        }
+
+        .pass-container {
+            width: 100%;
+            max-width: 90mm;
+            margin: 0 auto;
+            padding: 4mm 0;
+        }
+
+        .header {
+            text-align: center;
+            font-weight: bold;
+            font-size: 12pt;
+            margin-bottom: 5mm;
+        }
+
+        .detail-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 2mm;
+            font-size: 10pt;
+            flex-wrap: nowrap;
+        }
+
+        .detail-row span:first-child {
+            flex-shrink: 0;
+            width: 35%;
+            font-weight: bold;
+        }
+
+        .detail-row span:last-child {
+            flex: 1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            text-align: right;
+        }
+
+        .valid-dates {
+            text-align: center;
+            font-weight: bold;
+            font-size: 9pt;
+            border: 2px dashed #000;
+            padding: 3mm;
+            margin: 4mm 0;
+        }
+
+        .valid-dates .detail-row {
+            justify-content: space-between;
+            margin-bottom: 1.5mm;
+        }
+
+        .qr-code {
+            margin: 4mm auto;
+            width: 50%;
+            max-width: 40mm;
+        }
+
+        .qr-code img {
+            width: 100%;
+            height: auto;
+            display: block;
+            margin: 0 auto;
+            image-rendering: crisp-edges;
+        }
+
+        .footer {
+            font-size: 8pt;
+            font-weight: bold;
+            margin-top: 5mm;
+            border-top: 1px solid #000;
+            padding-top: 2mm;
+            text-align: center;
+        }
+
+        @media print {
+            html, body {
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+            .pass-container {
+                page-break-inside: avoid;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="pass-container">
+        <div class="header">STAFF PARKING PASS</div>
+
+        <div class="detail-row"><span>NAME:</span> <span>{{ staff.name }}</span></div>
+        <div class="detail-row"><span>PLATE:</span> <span>{{ staff.license_plate }}</span></div>
+        <div class="detail-row"><span>VEHICLE:</span> <span>{{ staff.vehicle_type.name }}</span></div>
+        <div class="detail-row"><span>COMPANY:</span> <span>{{ staff.company.name }}</span></div>
+
+        <div class="valid-dates">
+            <div class="detail-row">
+                <span>FROM:</span> 
+                <span>{{ pass.valid_from|date:"d/m/Y h:i A" }}</span>
+            </div>
+            <div class="detail-row">
+                <span>TO:</span> 
+                <span>{{ pass.valid_until|date:"d/m/Y h:i A" }}</span>
+            </div>
+        </div>
+
+        <div class="qr-code">
+            <img src="data:image/png;base64,{{ qr_code }}" alt="QR Code">
+        </div>
+
+        <div class="footer">
+            {% now "d/m/Y H:i" %}
+        </div>
+    </div>
+
+    <script>
+        window.onload = function () {
+            window.print();
+        };
+    </script>
+</body>
+</html>

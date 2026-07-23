@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Parking Coupon QR Codes</title>
+</head>
+<body>
+    <p>Dear {{ vendor.name }},</p>
+
+    <p>Please find attached the PDF file containing the QR and Coupon codes for your parking coupons.</p>
+
+    <p><strong>Batch Details:</strong></p>
+    <ul>
+        <li><strong>Purchase Date:</strong> {{ batch.purchase_date }}</li>
+        <li><strong>Number of Coupons:</strong> {{ batch.number_of_coupons }}</li>
+        <li><strong>Valid From:</strong> {{ batch.valid_from|date:"d/m/Y h:i A" }}</li>
+        <li><strong>Valid Until:</strong> {{ batch.valid_until|date:"d/m/Y h:i A" }}</li>
+        <li><strong>Waived Minutes:</strong> {{ batch.value_minutes }}</li>
+        <li><strong>Total Price:</strong> {{ batch.total_price }}</li>
+    </ul>
+
+    <p>If you have any questions or need further assistance, please don't hesitate to reach out to us.</p>
+
+    <p>Best regards,<br>
+    The Sallyan House Team</p>
+</body>
+</html>

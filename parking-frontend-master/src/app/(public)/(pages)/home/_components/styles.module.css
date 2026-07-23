@@ -1,0 +1,64 @@
+ .printable {
+     display: none;
+ }
+
+@keyframes blink {
+    0% {
+        opacity: 0;
+    }
+
+    33% {
+        opacity: 1;
+    }
+
+    66% {
+        opacity: 1;
+    }
+
+    100% {
+        opacity: 0;
+    }
+}
+
+.dot {
+    opacity: 0;
+    animation: blink 1.5s infinite;
+}
+
+.dot:nth-child(2) {
+    animation-delay: 0.5s;
+}
+
+.dot:nth-child(3) {
+    animation-delay: 1s;
+}
+
+
+@media print {
+    /* Hide entire page, then show only the ticket */
+    :global(body *) {
+        visibility: hidden;
+    }
+
+    :global(.ticket-print-root),
+    :global(.ticket-print-root *) {
+        visibility: visible;
+    }
+
+    :global(.ticket-print-root) {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+    }
+
+    .printable {
+        display: block !important;
+        padding-top: -20px;
+    }
+
+    .nonPrintable {
+        display: none;
+    }
+}
+

@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Coupon Batch {{ batch.id }}</title>
+    <style>
+        /* Reset & base */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'DejaVu Sans Mono', 'Courier New', monospace, Arial, sans-serif;
+            font-size: 10pt;
+            background: #fff;
+            color: #000;
+            -webkit-print-color-adjust: exact;
+            padding: 4mm 10mm;
+            width: auto;
+            height: auto;
+        }
+
+        /* Container */
+        .print-container {
+            max-width: 90mm;
+            margin: 0 auto;
+            padding: 4mm 0;
+        }
+
+        /* Header common */
+        .header {
+            text-align: center;
+            font-weight: bold;
+            font-size: 12pt;
+            margin-bottom: 5mm;
+        }
+
+        /* Label-value flex style */
+        .detail-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 2mm;
+            flex-wrap: nowrap;
+            font-size: 10pt;
+        }
+        .detail-row span:first-child {
+            flex-shrink: 0;
+            width: 35%;
+            font-weight: bold;
+            text-align: left;
+        }
+        .detail-row span:last-child {
+            flex: 1;
+            text-align: right;
+            word-break: break-word;
+        }
+
+        /* Coupon image */
+        .coupon-container {
+            margin-bottom: 20px;
+            page-break-after: always;
+            text-align: center;
+        }
+        img.coupon-img {
+            max-width: 100%;
+            height: auto;
+            display: inline-block;
+        }
+
+        /* Footer */
+        .footer {
+            font-size: 8pt;
+            font-weight: bold;
+            margin-top: 5mm;
+            border-top: 1px solid #000;
+            padding-top: 2mm;
+            text-align: center;
+        }
+
+        /* Print media */
+        @media print {
+            body {
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+            .print-container {
+                page-break-inside: avoid;
+                margin: 0 auto !important;
+                padding: 4mm 0 !important;
+                max-width: 90mm !important;
+            }
+            .no-print {
+                display: none !important;
+            }
+        }
+
+        /* Hide print buttons on print */
+        @media print {
+            .no-print {
+                display: none !important;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="print-container">
+        <!-- Optional header -->
+        <!-- <div class="header">Coupon Batch {{ batch.id }}</div> -->
+        <!-- <div class="detail-row"><span>Vendor:</span> <span>{{ batch.vendor.name }}</span></div> -->
+        <!-- <div class="detail-row"><span>Generated:</span> <span>{{ now }}</span></div> -->
+
+        <div class="print-actions no-print" style="text-align:center; margin:20px 0;">
+            <button onclick="window.print()">Print Coupons</button>
+            <button onclick="window.location.href='?format=pdf'">Download PDF</button>
+            <button onclick="window.close()">Close</button>
+        </div>
+
+        {% for img_data in coupon_images %}
+        <div class="coupon-container">
+            <img class="coupon-img" src="data:image/png;base64,{{ img_data }}" alt="Coupon">
+        </div>
+        {% endfor %}
+
+        <div class="footer">
+            <!-- Optional footer text if needed -->
+        </div>
+    </div>
+
+    {% if print_mode %}
+    <script>
+        window.onload = () => window.print();
+    </script>
+    {% endif %}
+</body>
+</html>

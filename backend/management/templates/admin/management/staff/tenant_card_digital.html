@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+{% load static %}
+<html>
+<head>
+    <title>{{ staff.name }} - Digital Parking Card</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html, body {
+            background: #f2f2f2;
+            color: #000;
+            height: 100%;
+        }
+
+        body {
+            font-family: -apple-system, 'Segoe UI', Roboto, sans-serif;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 16px;
+        }
+
+        .card {
+            background: #fff;
+            width: 100%;
+            max-width: 340px;
+            border-radius: 16px;
+            box-shadow: 0 2px 16px rgba(0,0,0,0.12);
+            padding: 24px;
+            text-align: center;
+        }
+
+        .header {
+            font-weight: 700;
+            font-size: 15px;
+            letter-spacing: 0.04em;
+            margin-bottom: 4px;
+        }
+
+        .subheader {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 16px;
+        }
+
+        .detail-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 14px;
+            margin-bottom: 6px;
+            text-align: left;
+        }
+
+        .detail-row span:first-child {
+            font-weight: 600;
+            color: #444;
+        }
+
+        .qr-code {
+            margin: 16px auto;
+            width: 70%;
+            max-width: 220px;
+            position: relative;
+        }
+
+        .qr-code img, .qr-code canvas {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+
+        .countdown {
+            font-size: 12px;
+            color: #888;
+            margin-top: 8px;
+        }
+
+        .countdown.stale {
+            color: #c0392b;
+            font-weight: 600;
+        }
+
+        .mode-toggle {
+            margin-top: 18px;
+            font-size: 12px;
+            color: #0066cc;
+            background: none;
+            border: none;
+            text-decoration: underline;
+            cursor: pointer;
+            padding: 4px;
+        }
+
+        .offline-banner {
+            display: none;
+            background: #fff8e1;
+            color: #7a5b00;
+            font-size: 11px;
+            font-weight: 600;
+            border-radius: 8px;
+            padding: 6px 8px;
+            margin-bottom: 12px;
+        }
+
+        .offline-banner.active {
+            display: block;
+        }
+
+        .offline-code {
+            display: none;
+            font-family: 'Courier New', monospace;
+            font-size: 28px;
+            font-weight: 700;
+            letter-spacing: 4px;
+            margin-top: 8px;
+        }
+
+        .offline-code.active {
+            display: block;
+        }
+
+        .card-id {
+            font-size: 10px;
+            color: #aaa;
+            margin-top: 4px;
+            word-break: break-all;
+        }
+
+        .footer {
+            font-size: 11px;
+            color: #999;
+            margin-top: 16px;
+            border-top: 1px solid #eee;
+            padding-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="header">DIGITAL PARKING CARD</div>
+        <div class="subheader">Refreshes automatically &mdash; do not screenshot</div>
+
+        <div class="offline-banner" id="offline-banner">
+            OFFLINE MODE &mdash; code still rotates every {{ offline_step_seconds }}s, no signal needed.
+            Use online mode when you have signal &mdash; it's more secure.
+        </div>
+
+        <div class="detail-row"><span>NAME:</span><span>{{ staff.name }}</span></div>
+        <div class="detail-row"><span>PLATE:</span><span>{{ staff.license_plate }}</span></div>
+        <div class="detail-row"><span>VEHICLE:</span><span>{{ staff.vehicle_type.name }}</span></div>
+        <div class="detail-row"><span>COMPANY:</span><span>{{ staff.company.name }}</span></div>
+
+        <div class="qr-code">
+            <img id="qr-img" src="data:image/png;base64,{{ qr_code }}" alt="QR Code">
+            <canvas id="qr-canvas" style="display:none;"></canvas>
+        </div>
+        <div class="offline-code" id="offline-code"></div>
+        <div class="card-id" id="offline-card-id"></div>
+        <div class="countdown" id="countdown"></div>
+
+        <button class="mode-toggle" id="mode-toggle" type="button">No internet at the gate? Switch to offline mode</button>
+
+        <div class="footer">Present at the gate. Code expires within seconds of leaving this screen.</div>
+    </div>
+
+    <script src="{% static 'management/vendor/qrcode.min.js' %}"></script>
+    <script>
+        (function () {
+            const tokenUrl = "{{ token_url|escapejs }}";
+            const cardCode = "{{ card_code|escapejs }}";
+            const offlineSecretHex = "{{ offline_secret_hex|escapejs }}";
+            const offlineStepSeconds = {{ offline_step_seconds }};
+            const offlineDigits = {{ offline_digits }};
+            const onlineRefreshMs = {{ refresh_seconds }} * 1000;
+
+            const countdownEl = document.getElementById('countdown');
+            const qrImgEl = document.getElementById('qr-img');
+            const qrCanvasEl = document.getElementById('qr-canvas');
+            const offlineCodeEl = document.getElementById('offline-code');
+            const offlineCardIdEl = document.getElementById('offline-card-id');
+            const offlineBannerEl = document.getElementById('offline-banner');
+            const toggleBtn = document.getElementById('mode-toggle');
+
+            let mode = 'online';
+            let secondsLeft = {{ refresh_seconds }};
+            let consecutiveFailures = 0;
+
+            function hexToBytes(hex) {
+                const bytes = new Uint8Array(hex.length / 2);
+                for (let i = 0; i < bytes.length; i++) {
+                    bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
+                }
+                return bytes;
+            }
+
+            async function computeOfflineCode() {
+                const step = Math.floor(Date.now() / 1000 / offlineStepSeconds);
+                const keyBytes = hexToBytes(offlineSecretHex);
+                const key = await crypto.subtle.importKey(
+                    'raw', keyBytes, { name: 'HMAC', hash: 'SHA-1' }, false, ['sign']
+                );
+                const msg = new ArrayBuffer(8);
+                const view = new DataView(msg);
+                view.setUint32(0, 0);
+                view.setUint32(4, step);
+                const sigBuf = await crypto.subtle.sign('HMAC', key, msg);
+                const sig = new Uint8Array(sigBuf);
+                const offset = sig[sig.length - 1] & 0x0f;
+                const codeInt = (
+                    ((sig[offset] & 0x7f) << 24) |
+                    ((sig[offset + 1] & 0xff) << 16) |
+                    ((sig[offset + 2] & 0xff) << 8) |
+                    (sig[offset + 3] & 0xff)
+                ) % Math.pow(10, offlineDigits);
+                return String(codeInt).padStart(offlineDigits, '0');
+            }
+
+            async function renderOfflineQr() {
+                const code = await computeOfflineCode();
+                const payload = cardCode + '#' + code;
+                offlineCodeEl.textContent = code.slice(0, 3) + ' ' + code.slice(3);
+                offlineCardIdEl.textContent = 'Card: ' + cardCode;
+                try {
+                    await QRCodeLib.toCanvas(qrCanvasEl, payload, { width: 220, margin: 1 });
+                } catch (e) {
+                    // canvas render failed (unsupported browser) — the numeric code above still works
+                }
+                secondsLeft = offlineStepSeconds;
+            }
+
+            function setMode(newMode) {
+                mode = newMode;
+                if (mode === 'offline') {
+                    qrImgEl.style.display = 'none';
+                    qrCanvasEl.style.display = 'block';
+                    offlineCodeEl.classList.add('active');
+                    offlineBannerEl.classList.add('active');
+                    toggleBtn.textContent = 'Have signal again? Switch to online mode';
+                    renderOfflineQr();
+                } else {
+                    qrImgEl.style.display = 'block';
+                    qrCanvasEl.style.display = 'none';
+                    offlineCodeEl.classList.remove('active');
+                    offlineBannerEl.classList.remove('active');
+                    toggleBtn.textContent = 'No internet at the gate? Switch to offline mode';
+                    consecutiveFailures = 0;
+                    refreshOnline();
+                }
+            }
+
+            toggleBtn.addEventListener('click', function () {
+                setMode(mode === 'online' ? 'offline' : 'online');
+            });
+
+            function tick() {
+                secondsLeft -= 1;
+                if (secondsLeft <= 0) {
+                    if (mode === 'offline') {
+                        renderOfflineQr();
+                        return;
+                    }
+                    countdownEl.textContent = 'Refreshing...';
+                    countdownEl.classList.add('stale');
+                    return;
+                }
+                countdownEl.textContent = 'Refreshes in ' + secondsLeft + 's';
+                countdownEl.classList.remove('stale');
+            }
+
+            async function refreshOnline() {
+                try {
+                    const res = await fetch(tokenUrl, { cache: 'no-store' });
+                    if (!res.ok) throw new Error('bad response');
+                    const data = await res.json();
+                    qrImgEl.src = 'data:image/png;base64,' + data.qr_code;
+                    secondsLeft = {{ refresh_seconds }};
+                    consecutiveFailures = 0;
+                } catch (e) {
+                    consecutiveFailures += 1;
+                    if (consecutiveFailures >= 2 && mode === 'online') {
+                        setMode('offline'); // no signal — fall back automatically
+                    }
+                }
+            }
+
+            setInterval(tick, 1000);
+            setInterval(function () {
+                if (mode === 'online') refreshOnline();
+            }, onlineRefreshMs);
+        })();
+    </script>
+</body>
+</html>
