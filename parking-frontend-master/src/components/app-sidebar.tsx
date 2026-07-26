@@ -131,11 +131,13 @@ export function AppSidebar() {
           )}
         >
           <div
-            className={` flex items-center gap-3 px-1 mb-10 ${isCollapsed ? "justify-center" : ""}`}
+            className={`h-17  flex items-center gap-3 px-1 mb-10 ${isCollapsed ? "justify-center" : ""}`}
           >
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-teal-700 text-sm font-bold text-white">
-              PM
-            </div>
+            <img
+              src="/images/website/sallyanHouse.png"
+              alt="Sallyan House"
+              className="h-8 w-8 shrink-0 rounded-lg object-contain"
+            />
             {!isCollapsed && (
               <div className="min-w-0 leading-tight gap-1">
                 <div className="truncate text-[15px] font-semibold tracking-tight text-zinc-900 text-md">
@@ -147,7 +149,7 @@ export function AppSidebar() {
               </div>
             )}
           </div>
-          <SidebarTrigger className="h-17 w-7 shrink-0 rounded-md text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600" />
+
           <Separator />
         </div>
 
