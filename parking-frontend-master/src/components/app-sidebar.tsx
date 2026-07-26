@@ -1,11 +1,12 @@
+import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
   Building2,
-  Receipt,
-  Wrench,
   Users,
+  Receipt,
   FileText,
+  Wrench,
   ChevronsUpDown,
 } from 'lucide-react';
 import {
@@ -19,9 +20,14 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarRail,
+  SidebarTrigger,
+  useSidebar,
 } from '@/components/ui/sidebar';
+import { cn } from '@/lib/utils';
 import { useAppSelector } from '@/lib/public/hooks';
 import { loginSelector } from '@/app/(public)/_login/_redux/selector';
+import { Separator } from '@base-ui/react';
 
 const topItem = { title: 'Dashboard', url: '/dashboard', icon: LayoutDashboard };
 
@@ -46,10 +52,28 @@ const groups = [
   },
 ];
 
+// TODO: replace with your real property list — pull from a `propertySelector`
+// (or whatever redux slice/query holds the tenant's properties) the same way
+// `loginSelector` is used below for the user.
+const PLACEHOLDER_PROPERTIES = ['Sallyan House Residency', 'Sallyan Heights', 'Ganeshtar Complex'];
+
 export function AppSidebar() {
   const navigate = useNavigate();
   const location = useLocation();
   const { currentUser, email } = useAppSelector(loginSelector);
+
+  // `state` is 'expanded' | 'collapsed' for the desktop icon-rail behavior.
+  // On mobile the Sidebar always renders full-width inside a Sheet, so we
+  // only apply the icon-only styling when we're actually on desktop.
+  const { state, isMobile, setOpenMobile } = useSidebar();
+  const isCollapsed = state === 'collapsed' && !isMobile;
+
+  const [propertyOpen, setPropertyOpen] = useState(false);
+  const [selectedProperty, setSelectedProperty] = useState(PLACEHOLDER_PROPERTIES[0]);
+
+  useEffect(() => {
+    if (isCollapsed) setPropertyOpen(false);
+  }, [isCollapsed]);
 
   const fullName = [currentUser?.firstName, currentUser?.lastName].filter(Boolean).join(' ');
   const displayName = fullName || 'User';
@@ -61,77 +85,128 @@ export function AppSidebar() {
     .slice(0, 2)
     .toUpperCase();
 
+  const goTo = (url: string) => {
+    navigate(url);
+    // Close the mobile drawer after navigating so the sheet doesn't linger.
+    setOpenMobile(false);
+  };
+
   const renderItem = (item: { title: string; url: string; icon: typeof LayoutDashboard }) => {
     const isActive = location.pathname === item.url;
     return (
-      <SidebarMenuItem key={item.title}>
+      <SidebarMenuItem key={item.title} >
         <SidebarMenuButton
-          onClick={() => navigate(item.url)}
+          onClick={() => goTo(item.url)}
           isActive={isActive}
-          className={
+          tooltip={item.title}
+          className={cn(
+            'group relative h-9 gap-2.5 rounded-lg px-2.5 py-2.5 text-sm font-medium ',
             isActive
-              ? 'rounded-md border-l-[3px] border-blue-600 bg-blue-50 pl-[calc(0.5rem-3px)] font-medium text-blue-600 hover:bg-blue-50 hover:text-blue-600'
-              : 'rounded-md text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-          }
+              ? 'bg-teal-50 text-teal-800 hover:bg-teal-50 hover:text-teal-800'
+              : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 '
+          )}
         >
-          <item.icon className="h-4 w-4 shrink-0" />
-          <span className="truncate text-sm">{item.title}</span>
+          {isActive && !isCollapsed && (
+            <span className="absolute top-1/2 left-0 h-5 w-1 -translate-y-1/2 rounded-r-full bg-teal-600 " />
+          )}
+          <item.icon
+            className={cn(
+              'h-[18px] w-[18px] shrink-0',
+              isActive ? 'text-teal-700' : 'text-zinc-400 group-hover:text-zinc-600'
+            )}
+          />
+          <span className="truncate">{item.title}</span>
         </SidebarMenuButton>
       </SidebarMenuItem>
     );
   };
 
   return (
-    <Sidebar className="border-r border-slate-200 bg-white">
-      <SidebarHeader className="gap-0 border-b border-slate-100 px-3 py-4 sm:px-4">
-        <div className="flex min-w-0 items-center gap-2.5 px-5 py-5">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-slate-900 font-serif text-sm font-bold text-white">
-            E
+    <Sidebar collapsible="icon" className="border-r border-zinc-200 bg-white ">
+      <SidebarHeader className="gap-0 border-b border-zinc-100 px-3 pt-3 pb-4">
+        <div
+          className={cn(
+            'mb-10 flex min-w-0 items-center gap-2',
+            isCollapsed ? 'flex-col justify-center gap-2' : 'justify-between'
+          )}
+        >
+          <div
+            className={` flex items-center gap-3 px-1 mb-10 ${isCollapsed ? "justify-center" : ""}`}
+          >
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-teal-700 text-sm font-bold text-white">
+              PM
+            </div>
+            {!isCollapsed && (
+              <div className="min-w-0 leading-tight gap-1">
+                <div className="truncate text-[15px] font-semibold tracking-tight text-zinc-900 text-md">
+                  Parking
+                </div>
+                <div className="truncate text-[10px] font-medium tracking-wide text-zinc-400 uppercase space-x-2">
+                  Management
+                </div>
+              </div>
+            )}
           </div>
-          <div className="flex min-w-0 flex-col leading-tight">
-            <span className="truncate text-sm font-semibold text-slate-900 uppercase">easymanage</span>
-            <span className="truncate text-[10px] font-medium tracking-wider text-slate-400 uppercase">
-              MANAGEMENT
-            </span>
-          </div>
+          <SidebarTrigger className="h-17 w-7 shrink-0 rounded-md text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600" />
+          <Separator />
         </div>
+
+        {/* Property switcher — multi-entity ownership */}
+
       </SidebarHeader>
 
-      <SidebarContent className="px-1.5 py-2 sm:px-2">
-        <SidebarGroup className="py-1">
-          <SidebarGroupContent>
-            <SidebarMenu className="gap-1">{renderItem(topItem)}</SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-
-        {groups.map((group) => (
-          <SidebarGroup key={group.label} className="py-1">
-            <SidebarGroupLabel className="truncate text-[11px] font-semibold tracking-wider text-slate-400 uppercase">
-              {group.label}
-            </SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu className="gap-1">{group.items.map(renderItem)}</SidebarMenu>
+      <SidebarContent className="gap-5 px-3 pt-6 pb-3 ">
+        <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto [scrollbar-width:thin] ">
+          <SidebarGroup className="p-0 mt-7">
+            <SidebarGroupContent className=''>
+              <SidebarMenu className="gap-1">{renderItem(topItem)}</SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
-        ))}
+
+          {groups.map((group) => (
+            <SidebarGroup key={group.label} className="p-3 gap-2 ">
+              {!isCollapsed && (
+                <SidebarGroupLabel className="mb-2 h-auto truncate px-2.5 py-0 text-[11px] font-semibold tracking-wider text-zinc-400 uppercase p-3   ">
+                  {group.label}
+                </SidebarGroupLabel>
+              )}
+              <SidebarGroupContent >
+                <SidebarMenu className="gap-3">{group.items.map(renderItem)}</SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          ))}
+        </div>
       </SidebarContent>
 
-      <SidebarFooter className="border-t border-slate-100 px-1.5 py-2 sm:px-2">
+      <SidebarFooter className="border-t border-zinc-100 px-3 py-3">
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton className="h-auto rounded-md py-2 text-slate-600 hover:bg-slate-100 hover:text-slate-900">
-              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-200 text-xs font-medium text-slate-600">
+            <SidebarMenuButton
+              tooltip={displayName}
+              className={cn(
+                'h-auto gap-2.5 rounded-lg px-2.5 py-2.5 text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900',
+                isCollapsed && 'justify-center'
+              )}
+            >
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-800 text-xs font-semibold text-white">
                 {initials || 'U'}
               </div>
-              <div className="flex min-w-0 flex-1 flex-col leading-tight">
-                <span className="truncate text-sm font-medium text-slate-900">{displayName}</span>
-                <span className="truncate text-xs text-slate-400">{displayEmail}</span>
-              </div>
-              <ChevronsUpDown className="h-4 w-4 shrink-0 text-slate-400" />
+              {!isCollapsed && (
+                <>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium text-zinc-800">{displayName}</div>
+                    <div className="truncate text-xs text-zinc-400">{displayEmail}</div>
+                  </div>
+                  <ChevronsUpDown className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
+                </>
+              )}
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>
+
+      {/* Thin edge strip — lets people drag/click to re-expand from icon mode */}
+      <SidebarRail />
     </Sidebar>
   );
 }
