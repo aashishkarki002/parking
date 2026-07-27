@@ -83,6 +83,14 @@ export const scanApiSlice = baseApiSlice.injectEndpoints({
         };
       },
     }),
+    getSessions: builder.query({
+      query: () => {
+        return {
+          url: scanApi,
+          method: 'GET',
+        };
+      },
+    }),
   }),
 });
 
@@ -94,5 +102,6 @@ export const {
   useTenantCardScanMutation,
   useTenantCardConfirmMutation,
   useLazySearchStaffQuery,
+  useGetSessionsQuery,
 } = scanApiSlice;
 
