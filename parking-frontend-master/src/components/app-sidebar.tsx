@@ -25,7 +25,6 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
-  SidebarTrigger,
   useSidebar,
 } from '@/components/ui/sidebar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -39,7 +38,6 @@ import { baseApiSlice } from '@/lib/public/baseApiSlice';
 import { PUBLIC_REFRESH_TOKEN } from '@/constants/public/tokens';
 import { HOME } from '@/constants/public/routes';
 import { useTheme } from '@/hooks/theme-provider';
-import { Separator } from '@base-ui/react';
 
 const topItem = { title: 'Dashboard', url: '/dashboard', icon: Squares2X2Icon };
 
@@ -148,7 +146,7 @@ export function AppSidebar() {
 
   return (
     <Sidebar collapsible="icon" className="border-r border-sidebar-border bg-sidebar ">
-      <SidebarHeader className="gap-0 border-b border-sidebar-border px-3 pt-3 ">
+      <SidebarHeader className="h-16 shrink-0 justify-center gap-0 border-b border-sidebar-border px-3 ">
         <div
           className={cn(
             ' flex min-w-0 items-center gap-2',
@@ -174,8 +172,6 @@ export function AppSidebar() {
               </div>
             )}
           </div>
-
-          <Separator />
         </div>
 
         {/* Property switcher — multi-entity ownership */}

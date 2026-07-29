@@ -276,9 +276,9 @@ const DashboardPage = () => {
     <SidebarProvider>
       <AppSidebar />
       <SidebarInset className={theme === 'dark' ? 'dark' : undefined}>
-        <div className="flex flex-col gap-3 border-b border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-6">
+        <div className="flex flex-col gap-3 border-b border-border px-4 py-3 sm:h-16 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-6">
           <div className="flex items-center gap-2">
-            <SidebarTrigger />
+            <SidebarTrigger className="h-8 w-8 shrink-0 rounded-lg border border-border text-foreground/70 hover:bg-muted hover:text-foreground" />
             <h1 className="text-lg font-semibold text-foreground sm:text-xl">Dashboard</h1>
 
           </div>
@@ -297,9 +297,9 @@ const DashboardPage = () => {
                   key={p.key}
                   value={p.key}
                   className={cn(
-                    'whitespace-nowrap px-2.5 py-1 text-xs font-medium sm:px-3 sm:py-1.5 sm:text-sm',
+                    'whitespace-nowrap px-2 py-0.5 text-xs font-medium sm:px-2.5 sm:py-1',
                     'text-muted-foreground hover:text-foreground',
-                    'data-[pressed]:bg-zinc-900 data-[pressed]:text-white dark:data-[pressed]:bg-teal-500 dark:data-[pressed]:text-zinc-950'
+                    'data-[pressed]:bg-primary data-[pressed]:text-white dark:data-[pressed]:bg-teal-500 dark:data-[pressed]:text-zinc-950'
                   )}
                 >
                   {p.label}
@@ -307,10 +307,11 @@ const DashboardPage = () => {
               ))}
             </ToggleGroup>
             <Button
+              size="lg"
               onClick={() => navigate('/')}
-              className="w-full justify-center gap-1.5 rounded-full bg-zinc-900 hover:bg-zinc-800 dark:bg-teal-500 dark:text-zinc-950 dark:hover:bg-teal-400 sm:w-auto"
+              className="w-full justify-center gap-1.5 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 sm:w-auto "
             >
-              <Plus className="h-4 w-4" />
+              <Plus className="h-3.5 w-3.5" />
               New session
             </Button>
           </div>

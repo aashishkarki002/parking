@@ -21,7 +21,7 @@ function ToggleGroup<Value extends string>({
     <ToggleGroupPrimitive
       data-slot="toggle-group"
       className={cn(
-        "inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 p-1",
+        "inline-flex items-center gap-0.5 rounded-full border border-border bg-muted/40 p-0.5",
         className
       )}
       {...props}
