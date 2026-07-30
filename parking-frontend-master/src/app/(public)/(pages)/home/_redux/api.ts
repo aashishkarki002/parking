@@ -91,6 +91,14 @@ export const scanApiSlice = baseApiSlice.injectEndpoints({
         };
       },
     }),
+    getStaff: builder.query({
+      query: () => {
+        return {
+          url: staffApi,
+          method: 'GET',
+        };
+      },
+    }),
   }),
 });
 
@@ -103,5 +111,6 @@ export const {
   useTenantCardConfirmMutation,
   useLazySearchStaffQuery,
   useGetSessionsQuery,
+  useGetStaffQuery,
 } = scanApiSlice;
 

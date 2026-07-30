@@ -1,24 +1,19 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowDown,
   ArrowUp,
   BarChart3,
-  Car,
   LineChart,
   Moon,
   Plus,
-  QrCode,
   Sun,
-  TrendingUp,
-  Wallet,
 } from 'lucide-react';
 import { useGetSessionsQuery } from '@/app/(public)/(pages)/home/_redux/api';
 import { AppSidebar } from '@/components/app-sidebar';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { cn } from '@/lib/utils';
@@ -156,7 +151,7 @@ function TrendPill({ value }: { value: number | null }) {
   return (
     <span
       className={cn(
-        'inline-flex shrink-0 items-center gap-0.5 text-xs font-semibold',
+        'inline-flex shrink-0 items-center gap-0.5  text-[11px] font-semibold tabular-nums',
         isUp ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500 dark:text-red-400'
       )}
     >
@@ -166,15 +161,37 @@ function TrendPill({ value }: { value: number | null }) {
   );
 }
 
-function StatIcon({ icon: Icon, tone }: { icon: typeof Wallet; tone: 'blue' | 'green' | 'amber' }) {
-  const toneClasses = {
-    blue: 'bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-400',
-    green: 'bg-emerald-50 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-400',
-    amber: 'bg-amber-50 text-amber-600 dark:bg-amber-500/15 dark:text-amber-400',
-  }[tone];
+// One channel of the KPI readout strip — label, hero figure, delta, baseline.
+// Kept uniform on purpose: this is a meter bridge, not a set of cards.
+function KpiCell({
+  label,
+  value,
+  delta,
+  footer,
+  loading,
+}: {
+  label: string;
+  value: ReactNode;
+  delta: number | null;
+  footer: ReactNode;
+  loading: boolean;
+}) {
   return (
-    <div className={cn('flex h-7 w-7 shrink-0 items-center justify-center rounded-lg sm:h-8 sm:w-8', toneClasses)}>
-      <Icon className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+    <div className="flex flex-col gap-2.5 bg-card p-4 sm:p-5">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[10.5px] font-semibold uppercase tracking-[0.09em] text-muted-foreground">
+          {label}
+        </span>
+        {loading ? <Skeleton className="h-3.5 w-10 shrink-0" /> : <TrendPill value={delta} />}
+      </div>
+      {loading ? (
+        <Skeleton className="h-8 w-28" />
+      ) : (
+        <div className="truncate text-[26px] font-bold leading-none tracking-tight tabular-nums text-foreground sm:text-[30px]">
+          {value}
+        </div>
+      )}
+      <div className="text-xs text-muted-foreground">{footer}</div>
     </div>
   );
 }
@@ -228,6 +245,7 @@ const DashboardPage = () => {
       predictedChange: pctChange(predictedRevenue, previousRevenue),
       digitalRevenue,
       digitalRevenuePrev,
+      digitalRevenueChange: pctChange(digitalRevenue, digitalRevenuePrev),
     };
   }, [sessions, period]);
 
@@ -309,7 +327,7 @@ const DashboardPage = () => {
             <Button
               size="lg"
               onClick={() => navigate('/')}
-              className="w-full justify-center gap-1.5 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 sm:w-auto "
+              className="w-full justify-center gap-1.5   text-primary-foreground hover:bg-primary/90 sm:w-auto "
             >
               <Plus className="h-3.5 w-3.5" />
               New session
@@ -324,101 +342,55 @@ const DashboardPage = () => {
             </div>
           ) : (
             <>
-              <div className="grid grid-cols-1 gap-7 sm:grid-cols-2 sm:gap-4 xl:grid-cols-4 ">
-                <Card>
-                  <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 p-4 pb-2 sm:p-6 sm:pb-3">
-                    <div className="flex min-w-0 items-center gap-5">
-                      <StatIcon icon={Wallet} tone="blue" />
-                      <CardTitle className="truncate">Current revenue</CardTitle>
-                    </div>
-                    {loading ? <Skeleton className="h-4 w-12 shrink-0" /> : <TrendPill value={stats.revenueChange} />}
-                  </CardHeader>
-                  <CardContent className="p-4 pt-0 sm:p-6 sm:pt-0 ">
-                    {loading ? (
-                      <Skeleton className="h-7 w-28" />
-                    ) : (
-                      <div className="truncate font-mono text-xl font-bold tracking-tight tabular-nums text-foreground sm:text-2xl">
-                        {formatNRs(stats.currentRevenue)}
-                      </div>
-                    )}
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      Previous {periodNoun}{' '}
-                      <span className="font-mono tabular-nums text-foreground/80">{formatNRs(stats.previousRevenue)}</span>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 p-4 pb-2 sm:p-6 sm:pb-3">
-                    <div className="flex min-w-0 items-center gap-2.5">
-                      <StatIcon icon={Car} tone="blue" />
-                      <CardTitle className="truncate">Cars parked</CardTitle>
-                    </div>
-                    {loading ? <Skeleton className="h-4 w-12 shrink-0" /> : <TrendPill value={stats.carsChange} />}
-                  </CardHeader>
-                  <CardContent className="p-4 pt-0 sm:p-6 sm:pt-0">
-                    {loading ? (
-                      <Skeleton className="h-7 w-16" />
-                    ) : (
-                      <div className="font-mono text-xl font-bold tracking-tight tabular-nums text-foreground sm:text-2xl">
-                        {stats.carsParked}
-                      </div>
-                    )}
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      Previous {periodNoun} <span className="font-mono tabular-nums text-foreground/80">{stats.carsParkedPrev}</span>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 p-4 pb-2 sm:p-6 sm:pb-3">
-                    <div className="flex min-w-0 items-center gap-2.5">
-                      <StatIcon icon={TrendingUp} tone="green" />
-                      <CardTitle className="truncate">Predicted revenue</CardTitle>
-                    </div>
-                    {loading ? <Skeleton className="h-4 w-12 shrink-0" /> : <TrendPill value={stats.predictedChange} />}
-                  </CardHeader>
-                  <CardContent className="p-4 pt-0 sm:p-6 sm:pt-0">
-                    {loading ? (
-                      <Skeleton className="h-7 w-28" />
-                    ) : (
-                      <div className="truncate font-mono text-xl font-bold tracking-tight tabular-nums text-foreground sm:text-2xl">
-                        {formatNRs(stats.predictedRevenue)}
-                      </div>
-                    )}
-                    <div className="mt-1 text-xs text-muted-foreground">End of this {periodNoun}</div>
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardHeader className="p-4 pb-2 sm:p-6 sm:pb-3">
-                    <div className="flex items-center gap-2.5">
-                      <StatIcon icon={QrCode} tone="amber" />
-                      <CardTitle>Online / QR</CardTitle>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="p-4 pt-0 sm:p-6 sm:pt-0">
-                    {loading ? (
-                      <Skeleton className="h-7 w-full" />
-                    ) : (
-                      <div className="flex items-center gap-2 sm:gap-3">
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate font-mono text-base font-bold tabular-nums text-foreground sm:text-lg">
-                            {formatNRs(stats.digitalRevenue)}
-                          </div>
-                          <div className="text-xs text-muted-foreground">this {periodNoun}</div>
-                        </div>
-                        <Separator orientation="vertical" className="h-9 shrink-0" />
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate font-mono text-base font-bold tabular-nums text-foreground/70 sm:text-lg">
-                            {formatNRs(stats.digitalRevenuePrev)}
-                          </div>
-                          <div className="text-xs text-muted-foreground">last {periodNoun}</div>
-                        </div>
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
+              <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border lg:grid-cols-4">
+                <KpiCell
+                  label="Revenue"
+                  loading={loading}
+                  value={formatNRs(stats.currentRevenue)}
+                  delta={stats.revenueChange}
+                  footer={
+                    <>
+                      Last {periodNoun}{' '}
+                      <span className=" tabular-nums text-foreground/70">{formatNRs(stats.previousRevenue)}</span>
+                    </>
+                  }
+                />
+                <KpiCell
+                  label="Cars parked"
+                  loading={loading}
+                  value={stats.carsParked}
+                  delta={stats.carsChange}
+                  footer={
+                    <>
+                      Last {periodNoun}{' '}
+                      <span className="font-mono tabular-nums text-foreground/70">{stats.carsParkedPrev}</span>
+                    </>
+                  }
+                />
+                <KpiCell
+                  label="Projected"
+                  loading={loading}
+                  value={formatNRs(stats.predictedRevenue)}
+                  delta={stats.predictedChange}
+                  footer={
+                    <>
+                      Last {periodNoun}{' '}
+                      <span className="font-mono tabular-nums text-foreground/70">{formatNRs(stats.previousRevenue)}</span>
+                    </>
+                  }
+                />
+                <KpiCell
+                  label="Online / QR"
+                  loading={loading}
+                  value={formatNRs(stats.digitalRevenue)}
+                  delta={stats.digitalRevenueChange}
+                  footer={
+                    <>
+                      Last {periodNoun}{' '}
+                      <span className="font-mono tabular-nums text-foreground/70">{formatNRs(stats.digitalRevenuePrev)}</span>
+                    </>
+                  }
+                />
               </div>
 
               <Card className="mt-4">
