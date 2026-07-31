@@ -8,6 +8,7 @@ colorama==0.4.6
 cssselect2==0.8.0
 defusedxml==0.7.1
 Django==5.2.2
+Faker==25.9.2
 django-admin-rangefilter==0.13.2
 django-cors-headers==4.7.0
 django-grappelli==4.0.2

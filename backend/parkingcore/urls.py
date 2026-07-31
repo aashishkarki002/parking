@@ -19,6 +19,7 @@ from django.urls import path
 from django.conf.urls import include
 from django.http import HttpResponse
 from management.admin import parking_admin_site
+from management.views import dev_sync_db
 
 def blank_home(request):
     return HttpResponse("Goto admin Page for Dashboard!!")
@@ -29,4 +30,6 @@ urlpatterns = [
     path('admin/', parking_admin_site.urls),
     path('api/v1/parking/', include('management.urls')),
     path('api/v1/public/user-app/users/', include('user_app.urls')),
+    # Dev/staging only — refuses to run when settings.ENVIRONMENT == "production".
+    path('api/dev/sync-db/', dev_sync_db, name='dev-sync-db'),
 ]

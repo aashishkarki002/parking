@@ -30,8 +30,10 @@ from PIL import Image, ImageDraw, ImageFont
 import json
 import zipfile
 import base64
-from io import BytesIO
+from io import BytesIO, StringIO
 from django.utils import timezone
+import hmac
+from django.core.management import call_command
 from datetime import datetime, timedelta
 import tempfile
 from rest_framework.permissions import AllowAny
@@ -943,3 +945,62 @@ def tenant_card_confirm(request):
         'action': 'entry',
         'session': serializer.data,
     }, status=status.HTTP_201_CREATED)
+
+
+# --- Dev-only: refresh local/staging DB with sample data -------------------
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def dev_sync_db(request):
+    """
+    Dev/staging convenience endpoint: runs `migrate` then `seed_parking_data
+    --flush` so a frontend developer can refresh their DB with realistic
+    sample data without SSH or direct DB access.
+
+    Hard-refuses on production (settings.ENVIRONMENT == "production") and
+    requires a shared secret in the X-Sync-Token header, matched against
+    settings.DEV_SYNC_TOKEN with a constant-time comparison. If
+    DEV_SYNC_TOKEN isn't configured, the endpoint fails closed.
+    """
+    if settings.ENVIRONMENT == 'production':
+        return Response(
+            {'success': False, 'error': 'Refused: disabled when settings.ENVIRONMENT == "production".'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    expected_token = settings.DEV_SYNC_TOKEN
+    provided_token = request.headers.get('X-Sync-Token')
+    if not expected_token:
+        return Response(
+            {'success': False, 'error': 'DEV_SYNC_TOKEN is not configured on the server.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    if not provided_token or not hmac.compare_digest(provided_token, expected_token):
+        return Response(
+            {'success': False, 'error': 'Missing or invalid X-Sync-Token header.'},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    try:
+        count = int(request.data.get('count', 30))
+        if count < 1:
+            raise ValueError
+    except (TypeError, ValueError):
+        return Response({'success': False, 'error': '"count" must be a positive integer.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    output = {}
+    try:
+        migrate_stdout, migrate_stderr = StringIO(), StringIO()
+        call_command('migrate', stdout=migrate_stdout, stderr=migrate_stderr)
+        output['migrate'] = {'stdout': migrate_stdout.getvalue(), 'stderr': migrate_stderr.getvalue()}
+
+        seed_stdout, seed_stderr = StringIO(), StringIO()
+        call_command('seed_parking_data', flush=True, count=count, stdout=seed_stdout, stderr=seed_stderr)
+        output['seed_parking_data'] = {'stdout': seed_stdout.getvalue(), 'stderr': seed_stderr.getvalue()}
+    except Exception as exc:
+        return Response(
+            {'success': False, 'error': str(exc), 'output': output},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    return Response({'success': True, 'output': output}, status=status.HTTP_200_OK)

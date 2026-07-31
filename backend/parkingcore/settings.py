@@ -27,6 +27,16 @@ DEBUG = True
 
 ALLOWED_HOSTS = ["*"]
 
+# Deployment tier: "development", "staging", or "production". Controls
+# whether dev-only endpoints (e.g. /api/dev/sync-db/) are allowed to run.
+# Production deploys MUST set ENVIRONMENT=production in the real environment.
+ENVIRONMENT = os.environ.get('ENVIRONMENT', 'development')
+
+# Shared secret required in the X-Sync-Token header to call /api/dev/sync-db/.
+# Set via env var only — never commit a real value. If unset, the endpoint
+# refuses all requests (fails closed).
+DEV_SYNC_TOKEN = os.environ.get('DEV_SYNC_TOKEN')
+
 
 # Application definition
 
