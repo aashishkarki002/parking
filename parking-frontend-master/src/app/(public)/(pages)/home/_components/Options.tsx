@@ -21,6 +21,7 @@ import {
   ListItemButton,
   ListItemText,
   Paper,
+  Skeleton,
   TextField,
   Typography,
 } from '@mui/material';
@@ -1281,9 +1282,11 @@ const Options = () => {
                 placeholder="e.g., Ramesh or PA03AB1234"
               />
               {searchStaffResult.isFetching && (
-                <Typography variant="caption" sx={{ color: '#888', marginTop: 1, display: 'block' }}>
-                  Searching...
-                </Typography>
+                <Box sx={{ marginTop: 1 }}>
+                  {Array.from({ length: 3 }).map((_, i) => (
+                    <Skeleton key={i} variant="text" height={32} />
+                  ))}
+                </Box>
               )}
               {!searchStaffResult.isFetching &&
                 offlineSearchQuery.trim().length >= 2 &&
