@@ -1,7 +1,7 @@
 # DO NOT REMOVE. CLOUDLINUX PASSENGER CONFIGURATION BEGIN
-PassengerAppRoot "/home/brainlyc/parkingbackend.brainlycodes.com"
+PassengerAppRoot "/home/sallyanh/backend.parking.sallyanhouse.com"
 PassengerBaseURI "/"
-PassengerPython "/home/brainlyc/virtualenv/parkingbackend.brainlycodes.com/3.11/bin/python"
+PassengerPython "/home/sallyanh/virtualenv/backend.parking.sallyanhouse.com/3.11/bin/python"
 # DO NOT REMOVE. CLOUDLINUX PASSENGER CONFIGURATION END
 # CORS Configuration
 <IfModule mod_headers.c>
