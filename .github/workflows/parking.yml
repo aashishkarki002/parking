@@ -18,9 +18,9 @@ jobs:
       
         uses: SamKirkland/FTP-Deploy-Action@v4.3.4
         with:
-          server: ${{ secrets.BACKEND_FTP_HOST }}
-          username: ${{ secrets.BACKEND_FTP_USER }}
-          password: ${{ secrets.BACKEND_FTP_PASSWORD }}
+          server: ${{ secrets.FTP_DOMAIN }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
           port: 21
           local-dir: tenant-management-backend/
           server-dir: /backend.parking.sallyanhouse.com/
