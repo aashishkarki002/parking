@@ -22,7 +22,7 @@ jobs:
           username: ${{ secrets.FTP_USERNAME }}
           password: ${{ secrets.FTP_PASSWORD }}
           port: 21
-          local-dir: tenant-management-backend/
+          local-dir: backend/
           server-dir: /backend.parking.sallyanhouse.com/
           exclude: |
             **/node_modules/**
