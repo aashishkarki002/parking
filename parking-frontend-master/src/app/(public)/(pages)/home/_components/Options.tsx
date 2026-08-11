@@ -1,12 +1,14 @@
 'use client';
 
 import AppButton from '@/components/cComponents/form/appButton/AppButton';
+import ApprovalIcon from '@mui/icons-material/Approval';
 import DriveEtaIcon from '@mui/icons-material/DriveEta';
 import LocalParkingIcon from '@mui/icons-material/LocalParking';
 import QrCodeScannerIcon from '@mui/icons-material/QrCodeScanner';
 import TwoWheelerIcon from '@mui/icons-material/TwoWheeler';
 import WifiOffIcon from '@mui/icons-material/WifiOff';
 import {
+  Autocomplete,
   Box,
   Button,
   Chip,
@@ -30,6 +32,9 @@ import { useEffect, useRef, useState } from 'react';
 import { toast } from 'react-toastify';
 import {
   useApplyCouponMutation,
+  useApplyStampMutation,
+  useGetVendorsQuery,
+  useLazyGetSessionByTicketQuery,
   useLazySearchStaffQuery,
   usePaymentMethodMutation,
   usePrintBillMutation,
@@ -51,6 +56,11 @@ import styles from './styles.module.css';
 // before the request goes out.
 const TENANT_CARD_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(:[^:]+:[^:]+|#\d{6})?$/i;
+
+interface VendorOption {
+  id: number;
+  name: string;
+}
 
 const Options = () => {
   const [bikeData, setBikeData] = useState<{
@@ -128,7 +138,24 @@ const Options = () => {
   const inputRef = useRef<HTMLInputElement>(null);
   const couponScanInputRef = useRef<HTMLInputElement>(null);
   const parkingPassInputRef = useRef<HTMLInputElement>(null);
+  const stampInputRef = useRef<HTMLInputElement>(null);
   const [currentVehicleType, setCurrentVehicleType] = useState<'2W' | '4W' | null>(null);
+
+  // Stamp flow: a tenant physically stamps a visitor's parking chit, and the
+  // operator records that stamp against the ticket here — as a validated
+  // visit tied to the tenant, not as a cash/online payment that never
+  // actually happened.
+  const [stampSession, setStampSession] = useState<{
+    ticketNo: string;
+    vehicleNo: string;
+    status: string;
+    stamps: { id: number; vendor: string; free_minutes_granted: number; stamped_at: string }[];
+    totalStampMinutes: number;
+    tenantBill: { vendor: string; overage_minutes: number; amount: string } | null;
+  } | null>(null);
+  const [stampVendorId, setStampVendorId] = useState<number | null>(null);
+  const [recordingStamp, setRecordingStamp] = useState(false);
+  const { data: vendorsData } = useGetVendorsQuery(undefined);
 
   const [scanQr] = useScanCodeMutation();
   const [printBill] = usePrintBillMutation();
@@ -136,6 +163,8 @@ const Options = () => {
   const [postCoupon] = useApplyCouponMutation();
   const [scanTenantCard] = useTenantCardScanMutation();
   const [confirmTenantCard] = useTenantCardConfirmMutation();
+  const [triggerGetSessionByTicket] = useLazyGetSessionByTicketQuery();
+  const [postStamp] = useApplyStampMutation();
 
   // Hardware barcode scanners type the whole code in one fast burst, but the
   // scanner's terminating Enter/CR suffix does not always reach the browser
@@ -359,6 +388,77 @@ const Options = () => {
     scanSubmitting.current = false;
   };
 
+  const submitStampScan = async () => {
+    const scannedTicket = stampInputRef.current?.value?.trim() ?? '';
+    if (!beginScanSubmit(scannedTicket)) return;
+
+    if (TENANT_CARD_PATTERN.test(scannedTicket)) {
+      toast.error('That looks like a tenant card, not a ticket. Scan the visitor’s parking chit instead.');
+      scanSubmitting.current = false;
+      if (stampInputRef.current) stampInputRef.current.value = '';
+      stampInputRef?.current?.blur();
+      return;
+    }
+
+    setScanning(true);
+    setStampSession(null);
+    setStampVendorId(null);
+
+    try {
+      const res = await triggerGetSessionByTicket(scannedTicket).unwrap();
+      if (res) {
+        setStampSession({
+          ticketNo: res.ticket_number,
+          vehicleNo: res.license_plate || '',
+          status: res.status,
+          stamps: res.stamps || [],
+          totalStampMinutes: res.total_stamp_minutes || 0,
+          tenantBill: res.tenant_bill || null,
+        });
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('Error looking up ticket for stamp:', err);
+      toast.error((err as { data?: { error?: string } })?.data?.error || 'Ticket not found.');
+    } finally {
+      setScanning(false);
+      scanSubmitting.current = false;
+      if (stampInputRef.current) stampInputRef.current.value = '';
+      stampInputRef?.current?.blur();
+    }
+  };
+
+  const handleRecordStamp = async () => {
+    if (!stampSession?.ticketNo || !stampVendorId) return;
+    setRecordingStamp(true);
+
+    try {
+      const res = await postStamp({
+        ticketNo: stampSession.ticketNo,
+        vendor_id: stampVendorId,
+      }).unwrap();
+
+      if (res) {
+        setStampSession({
+          ticketNo: res.ticket_number,
+          vehicleNo: res.license_plate || '',
+          status: res.status,
+          stamps: res.stamps || [],
+          totalStampMinutes: res.total_stamp_minutes || 0,
+          tenantBill: res.tenant_bill || null,
+        });
+        setStampVendorId(null);
+        toast.success('Stamp recorded — free minutes added to this ticket.');
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('Error recording stamp:', err);
+      toast.error((err as { data?: { error?: string } })?.data?.error || 'Could not record this stamp.');
+    } finally {
+      setRecordingStamp(false);
+    }
+  };
+
   const resetTicketData = () => {
     setBikeData(null);
     setCarData(null);
@@ -368,6 +468,8 @@ const Options = () => {
     setParkingPassData(null);
     setPendingCardScan(null);
     setCouponCode('');
+    setStampSession(null);
+    setStampVendorId(null);
     if (!processingPayment) {
       setProceedToGenerateBill(false);
       setBillGenerated(false);
@@ -415,6 +517,21 @@ const Options = () => {
       setTicketNo('');
       setScanning(true);
     }
+  };
+
+  const handleStampClick = () => {
+    resetTicketData();
+
+    if (stampInputRef.current) {
+      stampInputRef.current.value = '';
+    }
+
+    setTimeout(() => {
+      if (stampInputRef.current) {
+        stampInputRef.current.focus();
+        setScanning(true);
+      }
+    }, 50);
   };
 
   const handleDialogDismiss = () => {
@@ -532,6 +649,8 @@ const Options = () => {
     setParkingPassData(null);
     setPendingCardScan(null);
     setCouponCode('');
+    setStampSession(null);
+    setStampVendorId(null);
     setProceedToGenerateBill(false);
     setBillGenerated(false);
     setProcessingPayment(false);
@@ -623,6 +742,27 @@ const Options = () => {
             submitCouponScan();
           } else {
             queueScanSubmit(submitCouponScan);
+          }
+        }}
+      />
+      <input
+        ref={stampInputRef}
+        style={{
+          position: 'absolute',
+          left: '-9999px',
+          width: '1px',
+          height: '1px',
+          overflow: 'hidden',
+        }}
+        aria-hidden="true"
+        type="text"
+        onBlur={() => setScanning(false)}
+        onFocus={() => setStampSession(null)}
+        onKeyDown={(e) => {
+          if (e?.key === 'Enter') {
+            submitStampScan();
+          } else {
+            queueScanSubmit(submitStampScan);
           }
         }}
       />
@@ -757,6 +897,36 @@ const Options = () => {
                 onClick={handleBillClick}
               >
                 <QrCodeScannerIcon sx={{ fontSize: '180px' }} />
+              </AppButton>
+            </Grid>
+
+            <Grid item xs={12}>
+              <AppButton
+                loading={false}
+                extendStyle
+                sx={{
+                  width: '100%',
+                  minHeight: '90px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 1.5,
+                  backgroundColor: '#8d6e42',
+                  '&:hover': {
+                    backgroundColor: '#5b451f',
+                    color: '#fff',
+                    transform: 'translateY(-3px)',
+                  },
+                  '&:active': {
+                    transform: 'translateY(-1px)',
+                  },
+                }}
+                onClick={handleStampClick}
+              >
+                <ApprovalIcon sx={{ fontSize: '48px' }} />
+                <Typography sx={{ fontSize: '20px', fontWeight: 'bold' }}>
+                  Stamp a Visitor Ticket
+                </Typography>
               </AppButton>
             </Grid>
           </Grid>
@@ -917,7 +1087,161 @@ const Options = () => {
               </Box>
             )}
 
-            {!pendingCardScan && (parkingPassData || billData) && (
+            {!pendingCardScan && stampSession && (
+              <Box sx={{ flexGrow: 1 }}>
+                <Box
+                  sx={{
+                    marginBottom: 3,
+                    padding: 2,
+                    backgroundColor: '#fdf6ec',
+                    borderRadius: 2,
+                    border: '2px solid #8d6e42',
+                  }}
+                >
+                  <Typography
+                    variant="subtitle2"
+                    gutterBottom
+                    sx={{
+                      fontWeight: 'bold',
+                      color: '#5b451f',
+                      borderBottom: '1px solid #e6d9c3',
+                      paddingBottom: 1,
+                      marginBottom: 1.5,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 1,
+                    }}
+                  >
+                    <ApprovalIcon fontSize="small" />
+                    Tenant Stamp
+                  </Typography>
+
+                  <Box sx={{ marginBottom: 1 }}>
+                    <Typography variant="caption" sx={{ fontWeight: 'bold', color: '#555' }}>
+                      Ticket No:
+                    </Typography>{' '}
+                    <Typography variant="caption">{stampSession.ticketNo}</Typography>
+                  </Box>
+                  {stampSession.vehicleNo && (
+                    <Box sx={{ marginBottom: 1.5 }}>
+                      <Typography variant="caption" sx={{ fontWeight: 'bold', color: '#555' }}>
+                        Vehicle:
+                      </Typography>{' '}
+                      <Typography variant="caption">{stampSession.vehicleNo}</Typography>
+                    </Box>
+                  )}
+
+                  {stampSession.stamps.length > 0 && (
+                    <Box sx={{ marginBottom: 1.5, display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Typography variant="caption" sx={{ fontWeight: 'bold', color: '#555' }}>
+                        Status:
+                      </Typography>
+                      <Chip
+                        label={stampSession.status === 'STAMPED' ? 'Stamped — Free' : stampSession.status}
+                        size="small"
+                        sx={{
+                          backgroundColor: stampSession.status === 'STAMPED' ? '#4caf50' : '#ff9800',
+                          color: 'white',
+                          fontWeight: 'bold',
+                          fontSize: '0.65rem',
+                          height: '20px',
+                        }}
+                      />
+                    </Box>
+                  )}
+
+                  {stampSession.tenantBill && (
+                    <Box
+                      sx={{
+                        marginBottom: 1.5,
+                        padding: 1,
+                        backgroundColor: '#fff3e0',
+                        borderRadius: 1,
+                        border: '1px solid #ffcc80',
+                      }}
+                    >
+                      <Typography variant="caption" sx={{ color: '#e65100', display: 'block' }}>
+                        Overstayed the free window by {stampSession.tenantBill.overage_minutes} min — billed to{' '}
+                        <strong>{stampSession.tenantBill.vendor}</strong> (₹{stampSession.tenantBill.amount}). Visitor
+                        does not pay.
+                      </Typography>
+                    </Box>
+                  )}
+
+                  {stampSession.stamps.length > 0 && (
+                    <Box sx={{ marginBottom: 1.5 }}>
+                      <Typography
+                        variant="caption"
+                        sx={{ fontWeight: 'bold', color: '#555', display: 'block', marginBottom: 0.5 }}
+                      >
+                        Stamps on this ticket ({stampSession.totalStampMinutes} free min total):
+                      </Typography>
+                      {stampSession.stamps.map((s) => (
+                        <Chip
+                          key={s.id}
+                          label={`${s.vendor} · +${s.free_minutes_granted}min`}
+                          size="small"
+                          sx={{ marginRight: 0.5, marginBottom: 0.5 }}
+                        />
+                      ))}
+                    </Box>
+                  )}
+
+                  {stampSession.status === 'PAID' ? (
+                    <Typography variant="caption" sx={{ color: '#d32f2f' }}>
+                      This ticket is already settled — it can no longer be stamped.
+                    </Typography>
+                  ) : stampSession.tenantBill ? (
+                    <Typography variant="caption" sx={{ color: '#e65100', fontWeight: 'bold' }}>
+                      This ticket has already overstayed its free window and been billed to{' '}
+                      {stampSession.tenantBill.vendor}. No further stamps needed — scan the next ticket.
+                    </Typography>
+                  ) : (
+                    <>
+                      <Autocomplete<VendorOption>
+                        options={(vendorsData ?? []) as VendorOption[]}
+                        getOptionLabel={(option) => option?.name ?? ''}
+                        isOptionEqualToValue={(option, value) => option.id === value.id}
+                        value={
+                          ((vendorsData ?? []) as VendorOption[]).find((v) => v.id === stampVendorId) ??
+                          null
+                        }
+                        onChange={(_e, newValue) => setStampVendorId(newValue?.id ?? null)}
+                        renderInput={(params) => (
+                          <TextField {...params} label="Which tenant stamped this?" size="small" />
+                        )}
+                        size="small"
+                        sx={{ marginBottom: 1.5 }}
+                      />
+                      <Button
+                        variant="contained"
+                        onClick={handleRecordStamp}
+                        disabled={!stampVendorId || recordingStamp}
+                        fullWidth
+                        sx={{
+                          backgroundColor: '#8d6e42',
+                          fontSize: '0.75rem',
+                          fontWeight: 'bold',
+                          '&:hover': { backgroundColor: '#5b451f' },
+                        }}
+                      >
+                        {recordingStamp ? 'Recording...' : 'Record Stamp'}
+                      </Button>
+                    </>
+                  )}
+
+                  <Button
+                    size="small"
+                    onClick={handleStampClick}
+                    sx={{ marginTop: 1.5, color: '#8d6e42', textTransform: 'none' }}
+                  >
+                    Scan another ticket
+                  </Button>
+                </Box>
+              </Box>
+            )}
+
+            {!pendingCardScan && !stampSession && (parkingPassData || billData) && (
               <Box sx={{ flexGrow: 1 }}>
                 {parkingPassData && (
                   <Box
@@ -1182,7 +1506,7 @@ const Options = () => {
               </Box>
             )}
 
-            {!parkingPassData && !billData && !pendingCardScan && (
+            {!parkingPassData && !billData && !pendingCardScan && !stampSession && (
               <Box
                 sx={{
                   flexGrow: 1,
