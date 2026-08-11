@@ -12,7 +12,7 @@ import uuid
 from .models import (
     ParkingConfiguration, PricingPlan, VehicleType,
     Vendor, Staff, Coupon, CouponBatch,
-    ParkingPass, ParkingSession, CardScanLog
+    ParkingPass, ParkingSession, CardScanLog, TicketStamp, TenantBill
 )
 
 
@@ -46,7 +46,7 @@ class ParkingAdminSite(admin.AdminSite):
                          m[0].__name__ in ['ParkingConfiguration', 'PricingPlan', 'VehicleType']]
         people_models = [m for m in model_admins if m[0].__name__ in ['Vendor', 'Staff']]
         coupon_models = [m for m in model_admins if m[0].__name__ in ['CouponBatch', 'Coupon', 'ParkingPass']]
-        activity_models = [m for m in model_admins if m[0].__name__ in ['ParkingSession', 'CardScanLog']]
+        activity_models = [m for m in model_admins if m[0].__name__ in ['ParkingSession', 'CardScanLog', 'TicketStamp', 'TenantBill']]
 
         # Build custom app list
         custom_app_list = []
@@ -152,7 +152,7 @@ class VehicleTypeAdmin(BaseAdmin):
 # People Management
 @admin.register(Vendor, site=parking_admin_site)
 class VendorAdmin(BaseAdmin):
-    list_display = ('name', 'location', 'contact_person', 'contact_email')
+    list_display = ('name', 'location', 'contact_person', 'contact_email', 'stamp_free_minutes')
     search_fields = ('name', 'contact_person', 'location')
 
 
@@ -345,6 +345,22 @@ class CardScanLogAdmin(ReadOnlyAdmin):
     list_filter = ('action', 'source')
     search_fields = ('staff__name', 'staff__license_plate', 'card_code_used')
     date_hierarchy = 'scanned_at'
+
+
+@admin.register(TicketStamp, site=parking_admin_site)
+class TicketStampAdmin(ReadOnlyAdmin):
+    list_display = ('session', 'vendor', 'free_minutes_granted', 'stamped_at')
+    list_filter = ('vendor',)
+    search_fields = ('session__ticket_number', 'vendor__name')
+    date_hierarchy = 'stamped_at'
+
+
+@admin.register(TenantBill, site=parking_admin_site)
+class TenantBillAdmin(ReadOnlyAdmin):
+    list_display = ('session', 'vendor', 'overage_minutes', 'amount', 'created_at')
+    list_filter = ('vendor',)
+    search_fields = ('session__ticket_number', 'vendor__name')
+    date_hierarchy = 'created_at'
 
 
 # Parking Activity

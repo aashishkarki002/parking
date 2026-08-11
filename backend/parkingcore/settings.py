@@ -37,6 +37,37 @@ ENVIRONMENT = os.environ.get('ENVIRONMENT', 'development')
 # refuses all requests (fails closed).
 DEV_SYNC_TOKEN = os.environ.get('DEV_SYNC_TOKEN')
 
+# Shared secret required in the X-Restart-Token header to call
+# /api/ops/restart-app/. This host has no SSH/CI access, so CI restarts the
+# Passenger app over HTTP after an FTP deploy instead. Set via env var only
+# — never commit a real value. If unset, the endpoint refuses all requests
+# (fails closed).
+RESTART_TOKEN = os.environ.get('RESTART_TOKEN')
+
+# --- EasyManage integration (Sallyan House gate) ---
+# Hardcoded (not env-loaded, matching SECRET_KEY's convention — this project
+# doesn't use dotenv). Must match the corresponding value in EasyManage's
+# .env exactly.
+#
+# Shared secret used to verify X-Webhook-Signature on inbound tenant.* events
+# at /api/v1/parking/integrations/easymanage/webhook.
+PARKING_WEBHOOK_SECRET = 'd5c83a740683270dedfbb74dbf9642e6b4a54aa885f62b6350c7019584ee1690'
+
+# Base URL + API key for reconcile_parking_tenants to pull tenant data from
+# EasyManage's /api/integrations/parking pull API. EASYMANAGE_INTEGRATION_API_KEY
+# must match PARKING_INTEGRATION_API_KEY in EasyManage's .env.
+EASYMANAGE_API_BASE_URL = 'http://127.0.0.1:3000/api/integrations/parking'
+EASYMANAGE_INTEGRATION_API_KEY = 'b87b30c1ff3c66a9fa84246cd9d7334ac73208f2c885b5dc7ce6f4bdfdd05ec9'
+
+# Shared secret required in the X-Api-Key header to call
+# /api/v1/parking/integrations/easymanage/vendors/<id>/usage — lets EasyManage
+# pull a tenant's live vehicle list/usage on demand. Distinct from the two
+# secrets above (different operation, rotates independently).
+# Hardcoded (not env-loaded) to match SECRET_KEY's convention above — this
+# project doesn't use dotenv. Must match PARKING_READ_API_KEY in EasyManage's
+# .env exactly.
+PARKING_READ_API_KEY = '050febb11fe1695f112d8cf64a6f0d13681b45f3716c41cb7a7a484e57805280'
+
 
 # Application definition
 
@@ -76,6 +107,8 @@ MIDDLEWARE = [
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
 ]
 
 CORS_ALLOWED_ORIGINS = [
@@ -83,6 +116,8 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:3000",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
     "https://parkingbackend.brainlycodes.com",
     "https://parking.brainlycodes.com",
     "http://192.168.1.100:4000",

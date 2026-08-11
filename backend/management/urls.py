@@ -28,6 +28,16 @@ urlpatterns = [
     path('sessions/tenant-card/scan', views.tenant_card_scan, name='tenant-card-scan'),
     path('sessions/tenant-card/confirm', views.tenant_card_confirm, name='tenant-card-confirm'),
 
+    # EasyManage integration (Sallyan House gate) — full path:
+    # /api/v1/parking/integrations/easymanage/webhook
+    path('integrations/easymanage/webhook', views.easymanage_webhook, name='easymanage-webhook'),
+    # /api/v1/parking/integrations/easymanage/vendors/<id>/usage
+    path(
+        'integrations/easymanage/vendors/<str:external_tenant_id>/usage',
+        views.easymanage_vendor_usage,
+        name='easymanage-vendor-usage',
+    ),
+
     # Router views
     path('', include(router.urls)),
 ]
