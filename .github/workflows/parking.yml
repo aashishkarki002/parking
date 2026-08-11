@@ -23,7 +23,7 @@ jobs:
           password: ${{ secrets.FTP_PASSWORD }}
           port: 21
           local-dir: backend/
-          server-dir: /backend.parking.sallyanhouse.com/
+          server-dir: /
           exclude: |
             **/node_modules/**
             .github/**
