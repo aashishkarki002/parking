@@ -5,9 +5,7 @@ import {
   ArrowUp,
   BarChart3,
   LineChart,
-  Moon,
   Plus,
-  Sun,
 } from 'lucide-react';
 import { useGetSessionsQuery } from '@/app/(public)/(pages)/home/_redux/api';
 import { AppSidebar } from '@/components/app-sidebar';
@@ -200,7 +198,7 @@ const DashboardPage = () => {
   const navigate = useNavigate();
   const [period, setPeriod] = useState<Period>('week');
 
-  const [theme, setTheme] = useState<Theme>(
+  const [theme] = useState<Theme>(
     () => (localStorage.getItem(THEME_STORAGE_KEY) as Theme | null) ?? 'light'
   );
   useEffect(() => {

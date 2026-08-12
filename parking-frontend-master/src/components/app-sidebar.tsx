@@ -1,4 +1,3 @@
-import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Squares2X2Icon,
@@ -62,11 +61,6 @@ const groups = [
   },
 ];
 
-// TODO: replace with your real property list — pull from a `propertySelector`
-// (or whatever redux slice/query holds the tenant's properties) the same way
-// `loginSelector` is used below for the user.
-const PLACEHOLDER_PROPERTIES = ['Sallyan House Residency', 'Sallyan Heights', 'Ganeshtar Complex'];
-
 export function AppSidebar() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -80,13 +74,6 @@ export function AppSidebar() {
   const { state, isMobile, setOpenMobile } = useSidebar();
   const isCollapsed = state === 'collapsed' && !isMobile;
   const { theme, setTheme } = useTheme();
-
-  const [propertyOpen, setPropertyOpen] = useState(false);
-  const [selectedProperty, setSelectedProperty] = useState(PLACEHOLDER_PROPERTIES[0]);
-
-  useEffect(() => {
-    if (isCollapsed) setPropertyOpen(false);
-  }, [isCollapsed]);
 
   const fullName = [currentUser?.firstName, currentUser?.lastName].filter(Boolean).join(' ');
   const displayName = fullName || 'User';

@@ -365,6 +365,12 @@ const Options = () => {
         setBillData(respData);
         setBikeData(null);
         setCarData(null);
+        // Under the vehicle type's free-duration grace period (calculated_charge
+        // 0.00, status WAIVED server-side) — no payment method to collect, so
+        // skip straight to printing instead of waiting on a Cash/Online click.
+        if (respData.charge <= 0) {
+          setProceedToGenerateBill(true);
+        }
       } else {
         // eslint-disable-next-line no-console
         console.warn('Print Bill API call for bill succeeded but returned no data.');
@@ -372,6 +378,10 @@ const Options = () => {
     } catch (err) {
       // eslint-disable-next-line no-console
       console.log('err in api call for bill', err);
+      toast.warning(
+        (err as { data?: { error?: string } })?.data?.error ||
+          'This ticket was already scanned/settled — nothing more to charge.'
+      );
     } finally {
       scanSubmitting.current = false;
     }
@@ -415,6 +425,16 @@ const Options = () => {
           totalStampMinutes: res.total_stamp_minutes || 0,
           tenantBill: res.tenant_bill || null,
         });
+        // Backend's add_stamp() only allows ACTIVE/COMPLETED/STAMPED — surface
+        // the other terminal statuses immediately instead of letting the
+        // operator pick a vendor and fail on Record Stamp.
+        if (res.status === 'WAIVED') {
+          toast.warning('This ticket already exited free within the grace period — no stamp needed.');
+        } else if (res.status === 'COVERED_BY_PASS') {
+          toast.warning('This ticket is covered by a tenant parking pass — no stamp needed.');
+        } else if (res.status === 'PAID') {
+          toast.error('This ticket is already settled — it can no longer be stamped.');
+        }
       }
     } catch (err) {
       // eslint-disable-next-line no-console
@@ -846,9 +866,9 @@ const Options = () => {
                     transform: 'translateY(-1px)',
                   },
                 }}
-                onClick={handleParkingPassClick}
+                onClick={handleStampClick}
               >
-                <LocalParkingIcon sx={{ fontSize: '180px' }} />
+                <ApprovalIcon sx={{ fontSize: '180px' }} />
               </AppButton>
             </Grid>
 
@@ -921,11 +941,11 @@ const Options = () => {
                     transform: 'translateY(-1px)',
                   },
                 }}
-                onClick={handleStampClick}
+                onClick={handleParkingPassClick}
               >
-                <ApprovalIcon sx={{ fontSize: '48px' }} />
+                <LocalParkingIcon sx={{ fontSize: '48px' }} />
                 <Typography sx={{ fontSize: '20px', fontWeight: 'bold' }}>
-                  Stamp a Visitor Ticket
+                  Scan Tenant Card (Entry/Exit)
                 </Typography>
               </AppButton>
             </Grid>
@@ -1191,6 +1211,14 @@ const Options = () => {
                     <Typography variant="caption" sx={{ color: '#d32f2f' }}>
                       This ticket is already settled — it can no longer be stamped.
                     </Typography>
+                  ) : stampSession.status === 'WAIVED' ? (
+                    <Typography variant="caption" sx={{ color: '#2e7d32', fontWeight: 'bold' }}>
+                      This ticket already exited free within the grace period — no stamp needed.
+                    </Typography>
+                  ) : stampSession.status === 'COVERED_BY_PASS' ? (
+                    <Typography variant="caption" sx={{ color: '#2e7d32', fontWeight: 'bold' }}>
+                      This ticket is covered by a tenant parking pass — no stamp needed.
+                    </Typography>
                   ) : stampSession.tenantBill ? (
                     <Typography variant="caption" sx={{ color: '#e65100', fontWeight: 'bold' }}>
                       This ticket has already overstayed its free window and been billed to{' '}
@@ -1323,7 +1351,29 @@ const Options = () => {
                   </Box>
                 )}
 
-                {billData && !billGenerated && (
+                {billData && !billGenerated && billData.charge <= 0 && (
+                  <Box
+                    sx={{
+                      padding: 2,
+                      backgroundColor: '#e8f5e9',
+                      borderRadius: 2,
+                      border: '1px solid #c8e6c9',
+                      textAlign: 'center',
+                    }}
+                  >
+                    <Typography
+                      variant="subtitle1"
+                      sx={{ fontWeight: 'bold', color: '#2e7d32', mb: 0.5 }}
+                    >
+                      Free Parking (Waived)
+                    </Typography>
+                    <Typography variant="caption">
+                      Within the free-duration grace period — no payment needed. Printing…
+                    </Typography>
+                  </Box>
+                )}
+
+                {billData && !billGenerated && billData.charge > 0 && (
                   <Box
                     sx={{
                       padding: 2,
@@ -1482,13 +1532,19 @@ const Options = () => {
                       variant="subtitle1"
                       sx={{ fontWeight: 'bold', color: '#2e7d32', mb: 1 }}
                     >
-                      Payment Complete!
+                      {billData.charge > 0 ? 'Payment Complete!' : 'Free Exit Recorded!'}
                     </Typography>
                     <Typography variant="caption" sx={{ display: 'block', mb: 1 }}>
                       Ticket: <strong>{billData.ticketNo}</strong>
                     </Typography>
                     <Typography variant="caption" sx={{ display: 'block', mb: 2 }}>
-                      Amount Paid: <strong>₹{billData.charge}</strong>
+                      {billData.charge > 0 ? (
+                        <>
+                          Amount Paid: <strong>₹{billData.charge}</strong>
+                        </>
+                      ) : (
+                        <strong>Waived</strong>
+                      )}
                     </Typography>
                     <Button
                       variant="outlined"
@@ -1528,7 +1584,10 @@ const Options = () => {
         </Box>
       </Box>
 
-      {billData && proceedToGenerateBill && !billGenerated && billData.paymentMethod && (
+      {billData &&
+        proceedToGenerateBill &&
+        !billGenerated &&
+        (billData.paymentMethod || billData.charge <= 0) && (
         <GenerateBill
           ticketNo={billData.ticketNo}
           entryTime={billData.createdAt}
