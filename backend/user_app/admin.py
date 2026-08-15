@@ -1,6 +1,8 @@
 # user_app/admin.py
 from django.contrib import admin
-from django.contrib.auth.admin import UserAdmin
+from django.contrib.auth.admin import GroupAdmin, UserAdmin
+from django.contrib.auth.models import Group
+from management.admin import parking_admin_site
 from .models import User
 
 class CustomUserAdmin(UserAdmin):
@@ -25,5 +27,8 @@ class CustomUserAdmin(UserAdmin):
     ordering = ('email',)
     filter_horizontal = ('groups', 'user_permissions',)
 
-# Register the custom User model with the custom UserAdmin
-admin.site.register(User, CustomUserAdmin)
+# Register the custom User model (and Group, needed to grant permissions
+# like delete_parkingsession) on the custom admin site, since that's the
+# only admin site mounted in urls.py.
+parking_admin_site.register(User, CustomUserAdmin)
+parking_admin_site.register(Group, GroupAdmin)

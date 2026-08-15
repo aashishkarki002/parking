@@ -47,6 +47,7 @@ class ParkingAdminSite(admin.AdminSite):
         people_models = [m for m in model_admins if m[0].__name__ in ['Vendor', 'Staff']]
         coupon_models = [m for m in model_admins if m[0].__name__ in ['CouponBatch', 'Coupon', 'ParkingPass']]
         activity_models = [m for m in model_admins if m[0].__name__ in ['ParkingSession', 'CardScanLog', 'TicketStamp', 'TenantBill']]
+        user_models = [m for m in model_admins if m[0].__name__ in ['User', 'Group']]
 
         # Build custom app list
         custom_app_list = []
@@ -77,6 +78,13 @@ class ParkingAdminSite(admin.AdminSite):
                 'name': 'Parking Activity',
                 'app_label': 'activity',
                 'models': [self._build_model_dict(m[0], m[1], request) for m in activity_models]
+            })
+
+        if user_models:
+            custom_app_list.append({
+                'name': 'User Management',
+                'app_label': 'users',
+                'models': [self._build_model_dict(m[0], m[1], request) for m in user_models]
             })
 
         return custom_app_list
