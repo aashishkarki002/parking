@@ -15,6 +15,7 @@ interface IBillProp {
   paymentMethod?: any;
   status?: string;
   stamps?: { vendor: string }[];
+  tenantBill?: { vendor: string; overage_minutes: number; amount: string } | null;
   onComplete?: () => void;
 }
 export default function GenerateBill({
@@ -27,6 +28,7 @@ export default function GenerateBill({
   paymentMethod,
   status,
   stamps,
+  tenantBill,
   onComplete,
 }: Readonly<IBillProp>) {
   const inDate = formatDate(entryTime);
@@ -42,14 +44,23 @@ export default function GenerateBill({
   // See ParkingSession.SESSION_STATUS_CHOICES on the backend — a free exit
   // isn't always a plain fee waiver. For a stamped exit, name the tenant(s)
   // who stamped it so the printed slip carries proof of who authorized it.
+  //
+  // A stamped ticket that overstays its free window still exits the
+  // visitor for free — the overage is billed to the tenant (tenantBill)
+  // instead of the visitor — but its status falls back to COMPLETED once
+  // that happens ('STAMPED' only means "still within the free window").
+  // Key off stamps/tenantBill presence, not the exact status string, so
+  // that case doesn't silently print as a plain "Waived" grace-period exit.
   const stampVendorNames = (stamps ?? []).map((s) => s.vendor).filter(Boolean).join(', ');
   const freeExitLabel =
-    status === 'STAMPED'
-      ? stampVendorNames
-        ? `Stamped - ${stampVendorNames}`
-        : 'Stamped'
-      : status === 'COVERED_BY_PASS'
-        ? 'Covered by Pass'
+    status === 'COVERED_BY_PASS'
+      ? 'Covered by Pass'
+      : status === 'STAMPED' || (stamps && stamps.length > 0)
+        ? tenantBill
+          ? `Stamped - overstayed, billed to ${tenantBill.vendor}`
+          : stampVendorNames
+            ? `Stamped - ${stampVendorNames}`
+            : 'Stamped'
         : 'Waived';
 
   useEffect(() => {

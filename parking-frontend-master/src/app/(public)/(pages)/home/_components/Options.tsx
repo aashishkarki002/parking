@@ -66,12 +66,25 @@ interface VendorOption {
 // Backend session statuses that mean "no charge" — see
 // ParkingSession.SESSION_STATUS_CHOICES. A free exit isn't always a plain
 // fee waiver; distinguish why it's free instead of always saying "Waived".
-const getFreeExitLabel = (status?: string, stamps?: { vendor: string }[]) => {
-  if (status === 'STAMPED') {
+//
+// A stamped ticket that overstays its free window still exits the visitor
+// for free — the overage is billed to the tenant via TenantBill instead
+// (see ParkingSession.refresh_stamp_coverage on the backend) — but the
+// session's status falls back to COMPLETED once that happens, since
+// 'STAMPED' only means "still within the free window". Key off the
+// presence of stamps/tenant_bill rather than the exact status string so
+// that case doesn't silently print as a plain "Waived" grace-period exit.
+const getFreeExitLabel = (
+  status?: string,
+  stamps?: { vendor: string }[],
+  tenantBill?: { vendor: string; overage_minutes: number; amount: string } | null
+) => {
+  if (status === 'COVERED_BY_PASS') return 'Covered by Pass';
+  if (status === 'STAMPED' || (stamps && stamps.length > 0)) {
+    if (tenantBill) return `Stamped - overstayed, billed to ${tenantBill.vendor}`;
     const vendorNames = (stamps ?? []).map((s) => s.vendor).filter(Boolean).join(', ');
     return vendorNames ? `Stamped - ${vendorNames}` : 'Stamped';
   }
-  if (status === 'COVERED_BY_PASS') return 'Covered by Pass';
   return 'Waived';
 };
 
@@ -100,6 +113,7 @@ const Options = () => {
     paymentMethod?: string;
     status?: string;
     stamps?: { vendor: string }[];
+    tenantBill?: { vendor: string; overage_minutes: number; amount: string } | null;
   } | null>(null);
   const [parkingPassData, setParkingPassData] = useState<{
     action: string;
@@ -398,6 +412,7 @@ const Options = () => {
           paymentMethod: res.payment_method,
           status: res.status,
           stamps: res.stamps || [],
+          tenantBill: res.tenant_bill || null,
         };
         setBillData(respData);
         setBikeData(null);
@@ -517,6 +532,7 @@ const Options = () => {
             paymentMethod: exitRes.payment_method,
             status: exitRes.status,
             stamps: exitRes.stamps || res.stamps || [],
+            tenantBill: exitRes.tenant_bill || res.tenant_bill || null,
           });
           if (Number(exitRes.calculated_charge ?? 0) <= 0) {
             setProceedToGenerateBill(true);
@@ -1435,11 +1451,13 @@ const Options = () => {
                       variant="subtitle1"
                       sx={{ fontWeight: 'bold', color: '#2e7d32', mb: 0.5 }}
                     >
-                      Free Parking ({getFreeExitLabel(billData.status, billData.stamps)})
+                      Free Parking ({getFreeExitLabel(billData.status, billData.stamps, billData.tenantBill)})
                     </Typography>
                     <Typography variant="caption">
-                      {billData.status === 'STAMPED'
-                        ? 'Covered by a tenant stamp — no payment needed. Printing…'
+                      {billData.stamps && billData.stamps.length > 0
+                        ? billData.tenantBill
+                          ? `Overstayed the free window — billed to ${billData.tenantBill.vendor} instead. No payment needed. Printing…`
+                          : 'Covered by a tenant stamp — no payment needed. Printing…'
                         : billData.status === 'COVERED_BY_PASS'
                           ? 'Covered by a tenant parking pass — no payment needed. Printing…'
                           : 'Within the free-duration grace period — no payment needed. Printing…'}
@@ -1617,7 +1635,7 @@ const Options = () => {
                           Amount Paid: <strong>₹{billData.charge}</strong>
                         </>
                       ) : (
-                        <strong>{getFreeExitLabel(billData.status, billData.stamps)}</strong>
+                        <strong>{getFreeExitLabel(billData.status, billData.stamps, billData.tenantBill)}</strong>
                       )}
                     </Typography>
                     <Button
@@ -1672,6 +1690,7 @@ const Options = () => {
           paymentMethod={billData.paymentMethod}
           status={billData.status}
           stamps={billData.stamps}
+          tenantBill={billData.tenantBill}
           onComplete={() => {
             setBillGenerated(true);
             setProceedToGenerateBill(false);
