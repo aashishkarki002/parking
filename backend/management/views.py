@@ -533,7 +533,7 @@ class ParkingSessionViewSet(viewsets.ModelViewSet):
             if active_pass:
                 staff = active_pass.staff
                 request.data.update({
-                    'status': 'WAIVED',
+                    'status': 'COVERED_BY_PASS',
                     'applied_pass': active_pass.id,
                     'registered_staff_member': staff.id,
                     'vehicle_type': staff.vehicle_type.id if staff.vehicle_type else None
@@ -558,14 +558,22 @@ class ParkingSessionViewSet(viewsets.ModelViewSet):
     def calculate_charge(self, request, ticket_number=None):
         session = self.get_object()
 
-        # Check for active subscription if not already waived
-        if session.status != 'WAIVED' and session.license_plate:
+        # Already resolved — either covered by a pass, or (for sessions
+        # created before pass-coverage got its own status) waived at entry.
+        # Nothing left to calculate, so return the existing data instead of
+        # 400ing on a re-scan at exit.
+        if session.status in ('COVERED_BY_PASS', 'WAIVED'):
+            serializer = self.get_serializer(session)
+            return Response(serializer.data)
+
+        # Check for active subscription if not already covered by a pass
+        if session.license_plate:
             active_pass = self._check_active_subscription(session.license_plate)
             if active_pass:
                 staff = active_pass.staff
                 session.applied_pass = active_pass
                 session.registered_staff_member = staff
-                session.status = 'WAIVED'
+                session.status = 'COVERED_BY_PASS'
                 session.vehicle_type = staff.vehicle_type  # Update vehicle type from staff record
                 session.calculated_charge = 0
                 session.exit_time = timezone.now()
@@ -645,10 +653,10 @@ class ParkingSessionViewSet(viewsets.ModelViewSet):
         session = self.get_object()
         payment_method = request.data.get('payment_method')
 
-        if session.status not in ['COMPLETED', 'WAIVED']:
+        if session.status not in ['COMPLETED', 'WAIVED', 'COVERED_BY_PASS']:
             return Response(
                 {
-                    'error': 'Session must be in COMPLETED or WAIVED status to be marked as paid. Please calculate charge first.'},
+                    'error': 'Session must be in COMPLETED, WAIVED, or COVERED_BY_PASS status to be marked as paid. Please calculate charge first.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
