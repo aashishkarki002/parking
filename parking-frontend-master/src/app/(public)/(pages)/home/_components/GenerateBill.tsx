@@ -13,6 +13,8 @@ interface IBillProp {
   type: string;
   vehicleNo?: string;
   paymentMethod?: any;
+  status?: string;
+  stamps?: { vendor: string }[];
   onComplete?: () => void;
 }
 export default function GenerateBill({
@@ -23,12 +25,10 @@ export default function GenerateBill({
   type,
   vehicleNo,
   paymentMethod,
+  status,
+  stamps,
   onComplete,
 }: Readonly<IBillProp>) {
-  const imagesLoaded = {
-    image1: true,
-    image2: true,
-  };
   const inDate = formatDate(entryTime);
   const inTime = formatTime(entryTime);
   const outDate = formatDate(exitTime);
@@ -39,19 +39,23 @@ export default function GenerateBill({
     return method === 'ONLINE_PAYMENT' ? 'Digital Payment' : method === 'CASH' ? 'Cash' : method;
   };
 
+  // See ParkingSession.SESSION_STATUS_CHOICES on the backend — a free exit
+  // isn't always a plain fee waiver. For a stamped exit, name the tenant(s)
+  // who stamped it so the printed slip carries proof of who authorized it.
+  const stampVendorNames = (stamps ?? []).map((s) => s.vendor).filter(Boolean).join(', ');
+  const freeExitLabel =
+    status === 'STAMPED'
+      ? stampVendorNames
+        ? `Stamped - ${stampVendorNames}`
+        : 'Stamped'
+      : status === 'COVERED_BY_PASS'
+        ? 'Covered by Pass'
+        : 'Waived';
+
   useEffect(() => {
-    const handlePrint = () => {
-      if (Object.values(imagesLoaded).every(Boolean)) {
-        const printTimeout = setTimeout(() => {
-          window.print();
-        }, 500);
-
-        return () => clearTimeout(printTimeout);
-      }
-      return undefined;
-    };
-
-    handlePrint();
+    const printTimeout = setTimeout(() => {
+      window.print();
+    }, 500);
 
     const handleAfterPrint = () => {
       onComplete?.();
@@ -60,9 +64,10 @@ export default function GenerateBill({
     window.addEventListener('afterprint', handleAfterPrint);
 
     return () => {
+      clearTimeout(printTimeout);
       window.removeEventListener('afterprint', handleAfterPrint);
     };
-  }, [imagesLoaded, onComplete]);
+  }, [onComplete]);
 
   return (
     <Box
@@ -124,7 +129,7 @@ export default function GenerateBill({
                 PAID: ₹{amount} ({formatPaymentMethod(paymentMethod)})
               </>
             ) : (
-              <>FREE PARKING (Waived)</>
+              <>FREE PARKING ({freeExitLabel})</>
             )}
           </Typography>
         </Box>

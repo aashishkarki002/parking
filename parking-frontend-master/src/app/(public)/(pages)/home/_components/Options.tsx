@@ -33,6 +33,7 @@ import { toast } from 'react-toastify';
 import {
   useApplyCouponMutation,
   useApplyStampMutation,
+  useGetVehicleTypesQuery,
   useGetVendorsQuery,
   useLazyGetSessionByTicketQuery,
   useLazySearchStaffQuery,
@@ -62,6 +63,18 @@ interface VendorOption {
   name: string;
 }
 
+// Backend session statuses that mean "no charge" — see
+// ParkingSession.SESSION_STATUS_CHOICES. A free exit isn't always a plain
+// fee waiver; distinguish why it's free instead of always saying "Waived".
+const getFreeExitLabel = (status?: string, stamps?: { vendor: string }[]) => {
+  if (status === 'STAMPED') {
+    const vendorNames = (stamps ?? []).map((s) => s.vendor).filter(Boolean).join(', ');
+    return vendorNames ? `Stamped - ${vendorNames}` : 'Stamped';
+  }
+  if (status === 'COVERED_BY_PASS') return 'Covered by Pass';
+  return 'Waived';
+};
+
 const Options = () => {
   const [bikeData, setBikeData] = useState<{
     entryTime: string;
@@ -85,6 +98,8 @@ const Options = () => {
     endAt: string;
     isActive: boolean;
     paymentMethod?: string;
+    status?: string;
+    stamps?: { vendor: string }[];
   } | null>(null);
   const [parkingPassData, setParkingPassData] = useState<{
     action: string;
@@ -156,6 +171,26 @@ const Options = () => {
   const [stampVendorId, setStampVendorId] = useState<number | null>(null);
   const [recordingStamp, setRecordingStamp] = useState(false);
   const { data: vendorsData } = useGetVendorsQuery(undefined);
+  // VehicleType names/ids aren't consistent across environments (one DB we've
+  // seen uses "2Wheeler"/"4Wheeler", another uses "Motorcycle"/"Car"/etc), so
+  // neither a hardcoded id nor a hardcoded name string reliably identifies
+  // "the bike type". category ('BIKE'/'CAR') is the field actually meant for
+  // this distinction — prefer it, but some environments have every
+  // VehicleType row stuck on the model's 'CAR' default (a gap in
+  // seed_parking_data.py, which never sets category), so fall back to the
+  // "2Wheeler"/"4Wheeler" names, then to the historically-correct hardcoded
+  // ids (1 = 2Wheeler, 2 = 4Wheeler), so this never behaves worse than before.
+  const { data: vehicleTypesData } = useGetVehicleTypesQuery(undefined) as {
+    data?: { id: number; name: string; category: 'CAR' | 'BIKE' }[];
+  };
+  const bikeVehicleType =
+    vehicleTypesData?.find((vt) => vt.category === 'BIKE') ??
+    vehicleTypesData?.find((vt) => vt.name === '2Wheeler');
+  const carVehicleType =
+    vehicleTypesData?.find((vt) => vt.category === 'CAR' && vt.id !== bikeVehicleType?.id) ??
+    vehicleTypesData?.find((vt) => vt.name === '4Wheeler');
+  const bikeVehicleTypeId = bikeVehicleType?.id ?? 1;
+  const carVehicleTypeId = carVehicleType?.id ?? 2;
 
   const [scanQr] = useScanCodeMutation();
   const [printBill] = usePrintBillMutation();
@@ -354,13 +389,15 @@ const Options = () => {
           vehicleNo: res.license_plate || bikeData?.vehicleNo || carData?.vehicleNo || '',
           name: res.name || '',
           phone: res.phone || '',
-          type: res.vehicle_type === '2Wheeler' ? '2W' : '4W',
+          type: res.vehicle_type === (bikeVehicleType?.name ?? '2Wheeler') ? '2W' : '4W',
           // backend returns strings like "60.00" – coerce to number
           charge: Number(res.calculated_charge ?? 0),
           createdAt: res.entry_time,
           endAt: res.exit_time,
           isActive: res.is_active,
           paymentMethod: res.payment_method,
+          status: res.status,
+          stamps: res.stamps || [],
         };
         setBillData(respData);
         setBikeData(null);
@@ -459,16 +496,49 @@ const Options = () => {
       }).unwrap();
 
       if (res) {
-        setStampSession({
-          ticketNo: res.ticket_number,
-          vehicleNo: res.license_plate || '',
-          status: res.status,
-          stamps: res.stamps || [],
-          totalStampMinutes: res.total_stamp_minutes || 0,
-          tenantBill: res.tenant_bill || null,
-        });
-        setStampVendorId(null);
         toast.success('Stamp recorded — free minutes added to this ticket.');
+
+        // A stamp authorizes a free exit, so finish the exit right away
+        // instead of leaving the operator to separately re-scan the same
+        // ticket in the Car/Bike exit flow just to get exit_time recorded.
+        try {
+          const exitRes = await printBill({ ticketNo: res.ticket_number }).unwrap();
+          setBillData({
+            id: exitRes.id,
+            ticketNo: exitRes.ticket_number,
+            vehicleNo: exitRes.license_plate || res.license_plate || '',
+            name: exitRes.name || '',
+            phone: exitRes.phone || '',
+            type: exitRes.vehicle_type === (bikeVehicleType?.name ?? '2Wheeler') ? '2W' : '4W',
+            charge: Number(exitRes.calculated_charge ?? 0),
+            createdAt: exitRes.entry_time,
+            endAt: exitRes.exit_time,
+            isActive: exitRes.is_active,
+            paymentMethod: exitRes.payment_method,
+            status: exitRes.status,
+            stamps: exitRes.stamps || res.stamps || [],
+          });
+          if (Number(exitRes.calculated_charge ?? 0) <= 0) {
+            setProceedToGenerateBill(true);
+          }
+          setStampSession(null);
+        } catch (exitErr) {
+          // eslint-disable-next-line no-console
+          console.error('Error finishing exit after stamp:', exitErr);
+          toast.error(
+            (exitErr as { data?: { error?: string } })?.data?.error ||
+              'Stamp recorded, but the exit could not be finalized. Please scan this ticket in the exit flow.'
+          );
+          setStampSession({
+            ticketNo: res.ticket_number,
+            vehicleNo: res.license_plate || '',
+            status: res.status,
+            stamps: res.stamps || [],
+            totalStampMinutes: res.total_stamp_minutes || 0,
+            tenantBill: res.tenant_bill || null,
+          });
+        }
+        setStampVendorId(null);
       }
     } catch (err) {
       // eslint-disable-next-line no-console
@@ -570,7 +640,7 @@ const Options = () => {
 
     try {
       const res = await scanQr({
-        vehicle_type_id: currentVehicleType == '2W' ? 1 : 2,
+        vehicle_type_id: currentVehicleType === '2W' ? bikeVehicleTypeId : carVehicleTypeId,
         license_plate: vehicleToRegister,
       }).unwrap();
       if (res) {
@@ -1365,10 +1435,14 @@ const Options = () => {
                       variant="subtitle1"
                       sx={{ fontWeight: 'bold', color: '#2e7d32', mb: 0.5 }}
                     >
-                      Free Parking (Waived)
+                      Free Parking ({getFreeExitLabel(billData.status, billData.stamps)})
                     </Typography>
                     <Typography variant="caption">
-                      Within the free-duration grace period — no payment needed. Printing…
+                      {billData.status === 'STAMPED'
+                        ? 'Covered by a tenant stamp — no payment needed. Printing…'
+                        : billData.status === 'COVERED_BY_PASS'
+                          ? 'Covered by a tenant parking pass — no payment needed. Printing…'
+                          : 'Within the free-duration grace period — no payment needed. Printing…'}
                     </Typography>
                   </Box>
                 )}
@@ -1543,7 +1617,7 @@ const Options = () => {
                           Amount Paid: <strong>₹{billData.charge}</strong>
                         </>
                       ) : (
-                        <strong>Waived</strong>
+                        <strong>{getFreeExitLabel(billData.status, billData.stamps)}</strong>
                       )}
                     </Typography>
                     <Button
@@ -1596,6 +1670,8 @@ const Options = () => {
           type={billData.type}
           vehicleNo={billData.vehicleNo}
           paymentMethod={billData.paymentMethod}
+          status={billData.status}
+          stamps={billData.stamps}
           onComplete={() => {
             setBillGenerated(true);
             setProceedToGenerateBill(false);
