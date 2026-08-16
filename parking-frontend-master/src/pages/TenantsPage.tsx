@@ -4,6 +4,7 @@ import { toast } from 'react-toastify';
 import { useGetStaffQuery } from '@/app/(public)/(pages)/home/_redux/api';
 import { PageShell } from '@/components/PageShell';
 import { EmptyState } from '@/components/EmptyState';
+import { RegisterVehicleDialog } from '@/components/tenants/RegisterVehicleDialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -94,6 +95,7 @@ const TenantsPage = () => {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
   const [page, setPage] = useState(0);
+  const [registerOpen, setRegisterOpen] = useState(false);
 
   const stats = useMemo(() => {
     const total = staff.length;
@@ -149,12 +151,13 @@ const TenantsPage = () => {
     <PageShell
       title="Tenants & vehicles"
       actions={
-        <Button size="lg" onClick={() => toast.info('Vehicle registration is coming soon.')}>
+        <Button size="lg" onClick={() => setRegisterOpen(true)}>
           <Plus className="h-3.5 w-3.5" />
           Register vehicle
         </Button>
       }
     >
+      <RegisterVehicleDialog open={registerOpen} onOpenChange={setRegisterOpen} />
       {isError ? (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-400">
           Failed to load tenants.

@@ -4,12 +4,12 @@ import {
   Squares2X2Icon,
   BuildingOffice2Icon,
   UsersIcon,
-  BanknotesIcon,
   DocumentTextIcon,
   WrenchScrewdriverIcon,
   ChevronUpDownIcon,
   SunIcon,
   MoonIcon,
+
   ArrowRightStartOnRectangleIcon,
 } from '@heroicons/react/24/outline';
 import Cookies from 'js-cookie';
@@ -38,6 +38,7 @@ import { baseApiSlice } from '@/lib/public/baseApiSlice';
 import { PUBLIC_REFRESH_TOKEN } from '@/constants/public/tokens';
 import { HOME } from '@/constants/public/routes';
 import { useTheme } from '@/hooks/theme-provider';
+import { Clock10Icon } from 'lucide-react';
 
 const topItem = { title: 'Dashboard', url: '/dashboard', icon: Squares2X2Icon };
 
@@ -45,19 +46,19 @@ const groups = [
   {
     label: 'Core',
     items: [
-      { title: 'Properties', url: '/properties', icon: BuildingOffice2Icon },
+      { title: 'Sessions', url: '/sessions', icon: BuildingOffice2Icon },
       { title: 'Tenants', url: '/tenants', icon: UsersIcon },
     ],
   },
   {
-    label: 'Finance',
+    label: 'Billing',
     items: [
-      { title: 'Billing', url: '/billing', icon: BanknotesIcon },
+      { title: 'Subscription', url: '/subscription', icon: Clock10Icon },
       { title: 'Statements', url: '/statements', icon: DocumentTextIcon },
     ],
   },
   {
-    label: 'Operations',
+    label: 'Settings',
     items: [{ title: 'Maintenance', url: '/maintenance', icon: WrenchScrewdriverIcon }],
   },
 ];

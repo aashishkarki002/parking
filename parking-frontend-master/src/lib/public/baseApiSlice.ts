@@ -41,6 +41,6 @@ export const baseApiSlice = createApi({
   reducerPath: 'baseApi',
   baseQuery: axiosBaseQuery(),
   endpoints: () => ({}),
-  tagTypes: ['publicSearch', 'Search'],
+  tagTypes: ['publicSearch', 'Search', 'Staff', 'Sessions', 'ParkingPasses'],
 });
 

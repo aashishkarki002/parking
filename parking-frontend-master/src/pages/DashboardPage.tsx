@@ -1,10 +1,10 @@
+'use client';
+
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowDown,
   ArrowUp,
-  BarChart3,
-  LineChart,
   Moon,
   Plus,
   Sun,
@@ -17,17 +17,12 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { cn } from '@/lib/utils';
-import { RevenueTrendChart } from '@/components/dashboard/RevenueTrendChart';
+import { RevenueMixChart } from '@/components/dashboard/RevenueMixChart';
 import { MixCard } from '@/components/dashboard/MixCard';
 import { DARK_MIX_PALETTE, LIGHT_MIX_PALETTE, type MixSegment } from '@/components/dashboard/mix-types';
 
 type Theme = 'light' | 'dark';
 const THEME_STORAGE_KEY = 'parkflow-dashboard-theme';
-
-// Active/primary pill — used consistently across the period toggle, the New
-// session CTA, and the chart mode toggle so the "current selection" affordance
-// reads as one system.
-const ACTIVE_PILL = 'bg-zinc-900 text-white dark:bg-teal-500 dark:text-zinc-950';
 
 interface ParkingSession {
   id: string;
@@ -85,7 +80,7 @@ const inRange = (iso: string, start: Date, end: Date) => {
 };
 
 // Sunday-start calendar week, independent of the Today/Week/Month tabs above —
-// the revenue trend chart always compares "this calendar week vs last calendar week".
+// the revenue mix chart always compares "this calendar week vs last calendar week".
 const getSundayWeekStart = (offset: number): Date => {
   const now = new Date();
   const start = new Date(now);
@@ -252,27 +247,46 @@ const DashboardPage = () => {
   const periodNoun = PERIODS.find((p) => p.key === period)!.noun;
   const periodLabelLower = PERIODS.find((p) => p.key === period)!.label.toLowerCase();
 
-  const [chartMode, setChartMode] = useState<'bar' | 'line'>('bar');
-
-  const weeklyTrend = useMemo(() => {
+  // Cash vs. digital revenue per weekday of the current calendar week, plus
+  // the current week's digital-payment share vs. last week's — the two
+  // series stack to each day's total, so a stacked bar is meaningful here
+  // (unlike a this-week-vs-last-week comparison, which doesn't stack).
+  const revenueMix = useMemo(() => {
     const curStart = getSundayWeekStart(0);
     const prevStart = getSundayWeekStart(-1);
-    const current = new Array(7).fill(0);
-    const previous = new Array(7).fill(0);
+    const cash = new Array(7).fill(0);
+    const digital = new Array(7).fill(0);
+    let prevCash = 0;
+    let prevDigital = 0;
 
     for (const s of sessions) {
       const charge = Number(s.calculated_charge) || 0;
       if (charge === 0) continue;
       const t = new Date(s.entry_time).getTime();
+      const digitalPayment = isDigitalPayment(s);
 
       const curOffset = Math.floor((t - curStart.getTime()) / 86_400_000);
-      if (curOffset >= 0 && curOffset < 7) current[curOffset] += charge;
+      if (curOffset >= 0 && curOffset < 7) {
+        if (digitalPayment) digital[curOffset] += charge;
+        else cash[curOffset] += charge;
+      }
 
       const prevOffset = Math.floor((t - prevStart.getTime()) / 86_400_000);
-      if (prevOffset >= 0 && prevOffset < 7) previous[prevOffset] += charge;
+      if (prevOffset >= 0 && prevOffset < 7) {
+        if (digitalPayment) prevDigital += charge;
+        else prevCash += charge;
+      }
     }
 
-    return { labels: WEEKDAY_LABELS, current, previous };
+    const data = WEEKDAY_LABELS.map((day, i) => ({ day, cash: cash[i], digital: digital[i] }));
+    const totalCash = cash.reduce((sum, v) => sum + v, 0);
+    const totalDigital = digital.reduce((sum, v) => sum + v, 0);
+    const total = totalCash + totalDigital;
+    const prevTotal = prevCash + prevDigital;
+    const digitalSharePct = total > 0 ? (totalDigital / total) * 100 : 0;
+    const prevDigitalSharePct = prevTotal > 0 ? (prevDigital / prevTotal) * 100 : 0;
+
+    return { data, total, digitalSharePct, digitalShareDeltaPts: digitalSharePct - prevDigitalSharePct };
   }, [sessions]);
 
   const mix = useMemo(() => {
@@ -393,54 +407,18 @@ const DashboardPage = () => {
                 />
               </div>
 
-              <Card className="mt-4">
-                <CardHeader className="flex flex-col gap-3 p-4 pb-2 sm:flex-row sm:items-center sm:justify-between sm:p-6 sm:pb-3">
-                  <div className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 p-1">
-                    <button
-                      type="button"
-                      onClick={() => setChartMode('bar')}
-                      className={cn(
-                        'inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium transition-colors sm:px-3 sm:py-1.5',
-                        chartMode === 'bar' ? ACTIVE_PILL : 'text-muted-foreground hover:text-foreground'
-                      )}
-                    >
-                      <BarChart3 className="h-3.5 w-3.5" />
-                      Bar chart
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setChartMode('line')}
-                      className={cn(
-                        'inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-medium transition-colors sm:px-3 sm:py-1.5',
-                        chartMode === 'line' ? ACTIVE_PILL : 'text-muted-foreground hover:text-foreground'
-                      )}
-                    >
-                      <LineChart className="h-3.5 w-3.5" />
-                      Line chart
-                    </button>
-                  </div>
-                  <div className="flex items-center gap-4 text-xs font-medium text-muted-foreground">
-                    <span className="inline-flex items-center gap-1.5">
-                      <span className="h-2.5 w-2.5 rounded-sm bg-zinc-900 dark:bg-teal-400" /> This week
-                    </span>
-                    <span className="inline-flex items-center gap-1.5">
-                      <span className="h-2.5 w-2.5 rounded-sm bg-zinc-300 dark:bg-zinc-700" /> Last week
-                    </span>
-                  </div>
-                </CardHeader>
-                <CardContent className="p-4 pt-2 sm:p-6 sm:pt-2">
-                  {loading ? (
-                    <Skeleton className="h-[180px] w-full" />
-                  ) : (
-                    <RevenueTrendChart
-                      labels={weeklyTrend.labels}
-                      current={weeklyTrend.current}
-                      previous={weeklyTrend.previous}
-                      mode={chartMode}
-                    />
-                  )}
-                </CardContent>
-              </Card>
+              {loading ? (
+                <Skeleton className="mt-4 h-[340px] w-full rounded-xl" />
+              ) : (
+                <div className="mt-4">
+                  <RevenueMixChart
+                    data={revenueMix.data}
+                    total={revenueMix.total}
+                    digitalSharePct={revenueMix.digitalSharePct}
+                    digitalShareDeltaPts={revenueMix.digitalShareDeltaPts}
+                  />
+                </div>
+              )}
 
               <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
                 {loading ? (
