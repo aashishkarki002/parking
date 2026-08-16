@@ -33,6 +33,8 @@ import base64
 from io import BytesIO, StringIO
 from django.utils import timezone
 import hmac
+import hashlib
+import time
 from django.core.management import call_command
 from datetime import datetime, timedelta
 import tempfile
@@ -55,13 +57,14 @@ def CSS(*args, **kwargs):
 
 from .models import (
     ParkingConfiguration, PricingPlan, VehicleType, Vendor, Staff, Coupon,
-    ParkingPass, ParkingSession, CouponBatch, CardScanLog  # <-- ADD CouponBatch to imports
+    ParkingPass, ParkingSession, CouponBatch, CardScanLog, WebhookEventLog, TicketStamp, TenantBill  # <-- ADD CouponBatch to imports
 )
 from .serializers import (
     ParkingConfigurationSerializer, PricingPlanSerializer, VehicleTypeSerializer,
     VendorSerializer, StaffSerializer, CouponSerializer, ParkingPassSerializer,
     ParkingSessionSerializer, CouponBatchSerializer  # <-- ADD CouponBatchSerializer to imports
 )
+from .sync import sync_vendor_from_payload
 
 
 # --- Foundational Model Views (No Changes) ---
@@ -506,9 +509,20 @@ class ParkingSessionViewSet(viewsets.ModelViewSet):
     """
     queryset = ParkingSession.objects.select_related(
         'vehicle_type', 'registered_staff_member', 'applied_coupon', 'applied_pass'
-    ).all()
+    ).prefetch_related('stamps__vendor').all()
     serializer_class = ParkingSessionSerializer
     lookup_field = 'ticket_number'
+
+    def retrieve(self, request, *args, **kwargs):
+        # Elapsed time keeps moving while a stamped ticket is still parked
+        # (no exit_time yet), so re-evaluate stamp coverage on every lookup
+        # instead of trusting whatever status was last saved — otherwise a
+        # scan of a stamped ticket keeps showing stale ACTIVE/STAMPED status.
+        session = self.get_object()
+        if session.refresh_stamp_coverage():
+            session.save()
+        serializer = self.get_serializer(session)
+        return Response(serializer.data)
 
     def create(self, request, *args, **kwargs):
         license_plate = request.data.get('license_plate')
@@ -519,7 +533,7 @@ class ParkingSessionViewSet(viewsets.ModelViewSet):
             if active_pass:
                 staff = active_pass.staff
                 request.data.update({
-                    'status': 'WAIVED',
+                    'status': 'COVERED_BY_PASS',
                     'applied_pass': active_pass.id,
                     'registered_staff_member': staff.id,
                     'vehicle_type': staff.vehicle_type.id if staff.vehicle_type else None
@@ -544,14 +558,22 @@ class ParkingSessionViewSet(viewsets.ModelViewSet):
     def calculate_charge(self, request, ticket_number=None):
         session = self.get_object()
 
-        # Check for active subscription if not already waived
-        if session.status != 'WAIVED' and session.license_plate:
+        # Already resolved — either covered by a pass, or (for sessions
+        # created before pass-coverage got its own status) waived at entry.
+        # Nothing left to calculate, so return the existing data instead of
+        # 400ing on a re-scan at exit.
+        if session.status in ('COVERED_BY_PASS', 'WAIVED'):
+            serializer = self.get_serializer(session)
+            return Response(serializer.data)
+
+        # Check for active subscription if not already covered by a pass
+        if session.license_plate:
             active_pass = self._check_active_subscription(session.license_plate)
             if active_pass:
                 staff = active_pass.staff
                 session.applied_pass = active_pass
                 session.registered_staff_member = staff
-                session.status = 'WAIVED'
+                session.status = 'COVERED_BY_PASS'
                 session.vehicle_type = staff.vehicle_type  # Update vehicle type from staff record
                 session.calculated_charge = 0
                 session.exit_time = timezone.now()
@@ -560,7 +582,7 @@ class ParkingSessionViewSet(viewsets.ModelViewSet):
                 return Response(serializer.data)
 
         # Proceed with normal calculation if no active subscription
-        if session.status not in ['ACTIVE', 'COMPLETED']:
+        if session.status not in ['ACTIVE', 'COMPLETED', 'STAMPED']:
             return Response(
                 {'error': f'Cannot calculate charge for session with status "{session.status}".'},
                 status=status.HTTP_400_BAD_REQUEST
@@ -606,15 +628,35 @@ class ParkingSessionViewSet(viewsets.ModelViewSet):
         except (Coupon.DoesNotExist, ValidationError) as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
+    @action(detail=True, methods=['post'], url_path='apply-stamp')
+    def apply_stamp(self, request, ticket_number=None):
+        session = self.get_object()
+        vendor_id = request.data.get('vendor_id')
+        if not vendor_id:
+            return Response({'error': 'vendor_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            vendor = Vendor.objects.get(pk=vendor_id)
+        except (Vendor.DoesNotExist, ValueError):
+            return Response({'error': 'Tenant not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            session.add_stamp(vendor)
+        except ValidationError as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = self.get_serializer(session)
+        return Response(serializer.data)
+
     @action(detail=True, methods=['post'], url_path='mark-paid')
     def mark_paid(self, request, ticket_number=None):
         session = self.get_object()
         payment_method = request.data.get('payment_method')
 
-        if session.status not in ['COMPLETED', 'WAIVED']:
+        if session.status not in ['COMPLETED', 'WAIVED', 'COVERED_BY_PASS']:
             return Response(
                 {
-                    'error': 'Session must be in COMPLETED or WAIVED status to be marked as paid. Please calculate charge first.'},
+                    'error': 'Session must be in COMPLETED, WAIVED, or COVERED_BY_PASS status to be marked as paid. Please calculate charge first.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
@@ -849,6 +891,20 @@ def _resolve_staff_from_scan(raw_card_code):
             status=status.HTTP_403_FORBIDDEN,
         )
 
+    # EasyManage-driven revoke (tenant terminated/vacated). Checked separately
+    # from is_card_active so a vendor-level revoke shows up immediately even
+    # before the termination cascade has had a chance to flip every card's
+    # is_card_active — see sync.py#sync_vendor_from_payload.
+    if staff.company is not None and not staff.company.gate_access_allowed:
+        CardScanLog.objects.create(
+            staff=staff, card_code_used=raw_card_code[:64], action='REJECTED', source=source,
+            reject_reason='tenant gate access revoked',
+        )
+        return None, None, Response(
+            {'error': 'This tenant no longer has gate access. Contact the office.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
     if _rate_limited(staff):
         CardScanLog.objects.create(
             staff=staff, card_code_used=raw_card_code[:64], action='REJECTED', source=source,
@@ -1003,4 +1059,222 @@ def dev_sync_db(request):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
-    return Response({'success': True, 'output': output}, status=status.HTTP_200_OK)
+
+# --- Ops: restart the Passenger app over HTTP -------------------------------
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def restart_app_view(request):
+    """
+    Triggers a Passenger reload (see management/management/commands/restart_app.py)
+    over HTTP. This host has no automatable SSH, so CI (github/parking.yml)
+    FTP-deploys the code, then calls this endpoint to pick it up — the Python
+    equivalent of the old deploy.php webhook.
+
+    Requires a shared secret in the X-Restart-Token header, matched against
+    settings.RESTART_TOKEN with a constant-time comparison. If RESTART_TOKEN
+    isn't configured, the endpoint fails closed. Unlike /api/dev/sync-db/,
+    this is allowed in production — restarting prod is the whole point.
+    """
+    expected_token = settings.RESTART_TOKEN
+    provided_token = request.headers.get('X-Restart-Token')
+    if not expected_token:
+        return Response(
+            {'success': False, 'error': 'RESTART_TOKEN is not configured on the server.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    if not provided_token or not hmac.compare_digest(provided_token, expected_token):
+        return Response(
+            {'success': False, 'error': 'Missing or invalid X-Restart-Token header.'},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    run_migrate = bool(request.data.get('migrate', True))
+    run_collectstatic = bool(request.data.get('collectstatic', True))
+
+    command_args = []
+    if run_migrate:
+        command_args.append('--migrate')
+    if run_collectstatic:
+        command_args.append('--collectstatic')
+
+    restart_stdout, restart_stderr = StringIO(), StringIO()
+    try:
+        call_command('restart_app', *command_args, stdout=restart_stdout, stderr=restart_stderr)
+    except Exception as exc:
+        return Response(
+            {
+                'success': False,
+                'error': str(exc),
+                'output': {'stdout': restart_stdout.getvalue(), 'stderr': restart_stderr.getvalue()},
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    return Response({
+        'success': True,
+        'output': {'stdout': restart_stdout.getvalue(), 'stderr': restart_stderr.getvalue()},
+    })
+
+
+# --- EasyManage integration: inbound webhook receiver -----------------------
+
+WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS = 300  # reject signatures older than 5 minutes
+
+
+def _verify_webhook_signature(raw_body, signature_header, timestamp_header):
+    """
+    Verifies X-Webhook-Signature (sha256=<hex> of HMAC-SHA256 over
+    "<timestamp>.<rawBody>") against PARKING_WEBHOOK_SECRET, and rejects
+    stale timestamps. Modeled on the existing X-Sync-Token precedent in
+    dev_sync_db above, but signs the body rather than just checking a
+    static token.
+    """
+    if not signature_header or not timestamp_header:
+        return False
+
+    try:
+        timestamp = int(timestamp_header)
+    except (TypeError, ValueError):
+        return False
+
+    if abs(time.time() - timestamp) > WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS:
+        return False
+
+    secret = settings.PARKING_WEBHOOK_SECRET
+    if not secret:
+        return False
+
+    signed_message = f"{timestamp_header}.{raw_body.decode()}"
+    expected_signature = hmac.new(
+        secret.encode(), signed_message.encode(), hashlib.sha256
+    ).hexdigest()
+    expected_header = f"sha256={expected_signature}"
+
+    return hmac.compare_digest(expected_header, signature_header)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def easymanage_webhook(request):
+    """
+    Receives tenant.created/tenant.updated/quota.changed/tenant.terminated/
+    tenant.restored events from EasyManage's transactional-outbox dispatch
+    cron (webhook.md §3). AllowAny at the DRF layer since the caller is an
+    HMAC-authenticated service, not a user_app.User JWT caller.
+
+    Dedupes via WebhookEventLog — a retry inside the signature's timestamp
+    window (which will happen, since delivery is at-least-once) is a safe
+    no-op. Upserts through the same sync_vendor_from_payload() the
+    reconcile_parking_tenants command uses, so there is one upsert code path
+    for both directions.
+    """
+    raw_body = request.body
+    signature = request.headers.get('X-Webhook-Signature')
+    timestamp = request.headers.get('X-Webhook-Timestamp')
+
+    if not _verify_webhook_signature(raw_body, signature, timestamp):
+        return Response(
+            {'success': False, 'error': 'Invalid or missing webhook signature'},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    try:
+        envelope = json.loads(raw_body)
+    except (json.JSONDecodeError, TypeError):
+        return Response({'success': False, 'error': 'Invalid JSON body'}, status=status.HTTP_400_BAD_REQUEST)
+
+    event_id = envelope.get('eventId')
+    event_type = envelope.get('eventType')
+    data = envelope.get('data')
+
+    if not event_id or not event_type or not data:
+        return Response(
+            {'success': False, 'error': 'Missing eventId, eventType, or data'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if WebhookEventLog.objects.filter(event_id=event_id).exists():
+        return Response({'success': True, 'message': 'Already processed'}, status=status.HTTP_200_OK)
+
+    log = WebhookEventLog.objects.create(
+        event_id=event_id, event_type=event_type, payload=envelope, status='received',
+    )
+
+    try:
+        sync_vendor_from_payload(data, source='webhook')
+    except Exception as exc:
+        log.status = 'failed'
+        log.error = str(exc)
+        log.save(update_fields=['status', 'error'])
+        return Response({'success': False, 'error': str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    log.status = 'processed'
+    log.save(update_fields=['status'])
+
+    return Response({'success': True, 'message': 'Event processed'}, status=status.HTTP_200_OK)
+
+
+# --- EasyManage integration: on-demand vendor usage read (Parking tab rollup) ---
+
+EASYMANAGE_READ_HEADER = 'X-Api-Key'
+
+
+def _verify_read_api_key(request):
+    expected = settings.PARKING_READ_API_KEY
+    if not expected:
+        return False
+    provided = request.headers.get(EASYMANAGE_READ_HEADER)
+    if not provided:
+        return False
+    return hmac.compare_digest(provided, expected)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def easymanage_vendor_usage(request, external_tenant_id):
+    """
+    Read-only, on-demand pull for EasyManage's tenant "Parking" tab: given the
+    EasyManage Tenant._id (external_tenant_id), returns this vendor's cached
+    quota plus its current vehicle list. AllowAny at the DRF layer since the
+    caller is an API-key-authenticated service, not a logged-in operator.
+
+    404s (not a signature failure) when no Vendor row exists yet for this
+    external_tenant_id — that's a normal "not yet synced" state, not an error.
+    """
+    if not _verify_read_api_key(request):
+        return Response(
+            {'success': False, 'error': 'Invalid or missing API key'},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    vendor = Vendor.objects.filter(external_tenant_id=external_tenant_id).first()
+    if vendor is None:
+        return Response(
+            {'success': False, 'message': 'Not yet synced'},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    staff_qs = Staff.objects.filter(company=vendor).select_related('vehicle_type')
+    staff_list = [
+        {
+            'id': s.id,
+            'name': s.name,
+            'licensePlate': s.license_plate,
+            'vehicleType': s.vehicle_type.name if s.vehicle_type else None,
+            'category': s.vehicle_type.category if s.vehicle_type else None,
+            'isCardActive': s.is_card_active,
+        }
+        for s in staff_qs
+    ]
+
+    return Response({
+        'success': True,
+        'vendor': {
+            'name': vendor.name,
+            'carQuota': vendor.car_quota,
+            'bikeQuota': vendor.bike_quota,
+            'gateAccessAllowed': vendor.gate_access_allowed,
+        },
+        'staff': staff_list,
+    })

@@ -38,9 +38,7 @@ const Header = () => {
   return (
     <div className={styles.container}>
       <img src={LOGO_URL} alt="Sallyan House" width={80} height={70} />
-      <AppButton extendStyle onClick={() => navigate('/dashboard')}>
-        Dashboard
-      </AppButton>
+
       <AppButton
         loading={isLoading}
         extendStyle

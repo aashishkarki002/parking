@@ -1,10 +1,13 @@
 import { useMemo, useState } from 'react';
 import { Bike, Car, ChevronLeft, ChevronRight, Eye, Plus, Search } from 'lucide-react';
-import { toast } from 'react-toastify';
 import { useGetStaffQuery } from '@/app/(public)/(pages)/home/_redux/api';
 import { PageShell } from '@/components/PageShell';
 import { EmptyState } from '@/components/EmptyState';
+<<<<<<< HEAD
 import { RegisterVehicleDialog } from '@/components/tenants/RegisterVehicleDialog';
+=======
+import { VehicleFormSheet } from '@/components/VehicleFormSheet';
+>>>>>>> ed4b90cc8ed954f3b84bca4f54ca7ea383bd90f7
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -20,6 +23,7 @@ interface StaffMember {
   vehicle_type: string | null;
   is_card_active: boolean;
   active_pass_until: string | null;
+  card_code?: string;
 }
 
 const PAGE_SIZE = 8;
@@ -89,13 +93,29 @@ function KpiTile({
 }
 
 const TenantsPage = () => {
-  const { data, isLoading, isError } = useGetStaffQuery(undefined);
+  const { data, isLoading, isError, refetch } = useGetStaffQuery(undefined);
   const staff: StaffMember[] = data ?? [];
 
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
   const [page, setPage] = useState(0);
   const [registerOpen, setRegisterOpen] = useState(false);
+
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [formMode, setFormMode] = useState<'create' | 'edit'>('create');
+  const [selectedStaff, setSelectedStaff] = useState<StaffMember | null>(null);
+
+  const openRegisterVehicle = () => {
+    setFormMode('create');
+    setSelectedStaff(null);
+    setSheetOpen(true);
+  };
+
+  const openVehicleDetail = (member: StaffMember) => {
+    setFormMode('edit');
+    setSelectedStaff(member);
+    setSheetOpen(true);
+  };
 
   const stats = useMemo(() => {
     const total = staff.length;
@@ -151,7 +171,11 @@ const TenantsPage = () => {
     <PageShell
       title="Tenants & vehicles"
       actions={
+<<<<<<< HEAD
         <Button size="lg" onClick={() => setRegisterOpen(true)}>
+=======
+        <Button size="lg" onClick={openRegisterVehicle}>
+>>>>>>> ed4b90cc8ed954f3b84bca4f54ca7ea383bd90f7
           <Plus className="h-3.5 w-3.5" />
           Register vehicle
         </Button>
@@ -279,7 +303,7 @@ const TenantsPage = () => {
                       <td className="px-3 py-2.5 text-right">
                         <button
                           type="button"
-                          onClick={() => toast.info(`Tenant detail view for ${s.name} is coming soon.`)}
+                          onClick={() => openVehicleDetail(s)}
                           className="inline-flex items-center gap-1.5 text-xs font-semibold text-muted-foreground hover:text-primary"
                         >
                           <Eye className="h-3.5 w-3.5" />
@@ -322,6 +346,17 @@ const TenantsPage = () => {
           </div>
         </div>
       )}
+
+      <VehicleFormSheet
+        mode={formMode}
+        staff={selectedStaff}
+        open={sheetOpen}
+        onOpenChange={setSheetOpen}
+        onSaved={() => {
+          setSheetOpen(false);
+          refetch();
+        }}
+      />
     </PageShell>
   );
 };

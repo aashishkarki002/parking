@@ -1,0 +1,48 @@
+name: Deploy Backend (Parking)
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy-parking-backend:
+    runs-on: ubuntu-latest
+    steps:
+
+      # 1️⃣ Checkout code
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # 2️⃣ FTP Deploy
+      - name: FTP Deploy
+      
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.4
+        with:
+          server: ${{ secrets.FTP_DOMAIN }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          port: 21
+          local-dir: backend/
+          server-dir: /
+          exclude: |
+            **/node_modules/**
+            .github/**
+            *.log
+            *.zip
+          dangerous-clean-slate: false
+
+      # 3️⃣ Restart Passenger & install dependencies
+      - name: Restart Passenger & Install Dependencies
+        run: |
+          response=$(curl -s -w "\n%{http_code}" -X POST \
+            -H "X-Restart-Token: ${{ secrets.RESTART_TOKEN }}" \
+            "https://backend.parking.sallyanhouse.com/api/ops/restart-app/")
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+          echo "Response: $body"
+          if [ "$http_code" = "200" ]; then
+            echo "✅ Deployment completed successfully!"
+          else
+            echo "❌ Restart failed with HTTP $http_code"
+            exit 1
+          fi

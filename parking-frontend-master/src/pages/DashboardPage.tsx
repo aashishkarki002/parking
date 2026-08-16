@@ -5,9 +5,13 @@ import { useNavigate } from 'react-router-dom';
 import {
   ArrowDown,
   ArrowUp,
+<<<<<<< HEAD
   Moon,
+=======
+  BarChart3,
+  LineChart,
+>>>>>>> ed4b90cc8ed954f3b84bca4f54ca7ea383bd90f7
   Plus,
-  Sun,
 } from 'lucide-react';
 import { useGetSessionsQuery } from '@/app/(public)/(pages)/home/_redux/api';
 import { AppSidebar } from '@/components/app-sidebar';
@@ -195,7 +199,7 @@ const DashboardPage = () => {
   const navigate = useNavigate();
   const [period, setPeriod] = useState<Period>('week');
 
-  const [theme, setTheme] = useState<Theme>(
+  const [theme] = useState<Theme>(
     () => (localStorage.getItem(THEME_STORAGE_KEY) as Theme | null) ?? 'light'
   );
   useEffect(() => {

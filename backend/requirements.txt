@@ -24,6 +24,7 @@ PyJWT==2.9.0
 pyphen==0.17.2
 qrcode==8.2
 reportlab==4.4.1
+requests==2.32.3
 sqlparse==0.5.3
 tinycss2==1.4.0
 tinyhtml5==2.0.0

@@ -60,12 +60,6 @@ axiosInstance.interceptors.request.use(
 
 axiosInstance.interceptors.response.use(
   (response: AxiosResponse) => {
-    if (response?.data?.status) {
-      toast.success(response?.data?.status);
-    } else if (response?.data?.message) {
-      toast.success(response?.data?.message);
-    }
-
     return response;
   },
   async (error) => {

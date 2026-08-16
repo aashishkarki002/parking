@@ -27,6 +27,8 @@ from management.models import (
     ParkingSession,
     PricingPlan,
     Staff,
+    TenantBill,
+    TicketStamp,
     Vendor,
     VehicleType,
 )
@@ -34,9 +36,12 @@ from management.models import (
 fake = Faker()
 
 # Models that carry is_sample, in child-first order so --flush never trips a
-# PROTECT constraint (e.g. VehicleType.pricing_plan) or cascades onto a
-# non-sample row that happens to reference a sample parent.
+# PROTECT constraint (e.g. VehicleType.pricing_plan, TicketStamp.vendor,
+# TenantBill.vendor) or cascades onto a non-sample row that happens to
+# reference a sample parent.
 SAMPLE_MODELS_CHILD_FIRST = [
+    TenantBill,
+    TicketStamp,
     CardScanLog,
     ParkingSession,
     ParkingPass,
@@ -86,6 +91,8 @@ VENDOR_NAMES = [
     "Lakeside Offices",
 ]
 
+STAMP_FREE_MINUTES_CHOICES = [30, 45, 60, 90]
+
 SESSION_PAYMENT_METHODS = ["CASH", "ONLINE_PAYMENT"]
 
 
@@ -129,11 +136,13 @@ class Command(BaseCommand):
             coupons = self._create_coupons(vendors)
             self._create_parking_passes(staff)
             sessions = self._create_parking_sessions(count, vehicle_types, staff, coupons)
+            ticket_stamps, tenant_bills = self._create_ticket_stamps(sessions, vendors)
             self._create_scan_logs(sessions)
 
         self.stdout.write(self.style.SUCCESS(
             f"Seeded {len(vendors)} vendors, {len(vehicle_types)} vehicle types, "
-            f"{len(staff)} staff, {len(coupons)} coupons, {len(sessions)} parking sessions."
+            f"{len(staff)} staff, {len(coupons)} coupons, {len(sessions)} parking sessions, "
+            f"{len(ticket_stamps)} ticket stamps, {len(tenant_bills)} tenant bills."
         ))
 
     # -- flush -------------------------------------------------------------
@@ -167,6 +176,7 @@ class Command(BaseCommand):
                     "location": fake.street_address(),
                     "contact_person": fake.name(),
                     "contact_email": fake.company_email(),
+                    "stamp_free_minutes": random.choice(STAMP_FREE_MINUTES_CHOICES),
                     "is_sample": True,
                 },
             )
@@ -358,6 +368,30 @@ class Command(BaseCommand):
             sessions.append(session)
 
         return sessions
+
+    def _create_ticket_stamps(self, sessions, vendors):
+        # A tenant "stamps" a visitor's chit before they've settled up at the
+        # gate, so only sessions still sitting in COMPLETED (exited, unpaid)
+        # are realistic candidates. add_stamp() recalculates the session's
+        # stamp coverage itself, which may flip its status to STAMPED (fully
+        # covered) or leave it COMPLETED with a TenantBill for the overage
+        # (see ParkingSession.refresh_stamp_coverage).
+        stamps = []
+        tenant_bills = []
+        candidates = [s for s in sessions if s.status == "COMPLETED"]
+        for session in candidates:
+            if random.random() > 0.35:
+                continue
+            vendor = random.choice(vendors)
+            stamp = session.add_stamp(vendor)
+            TicketStamp.objects.filter(pk=stamp.pk).update(is_sample=True)
+            stamps.append(stamp)
+            bill = TenantBill.objects.filter(session=session).first()
+            if bill:
+                bill.is_sample = True
+                bill.save(update_fields=["is_sample"])
+                tenant_bills.append(bill)
+        return stamps, tenant_bills
 
     def _create_scan_logs(self, sessions):
         # scanned_at is auto_now_add, so it can't be set on the initial save();

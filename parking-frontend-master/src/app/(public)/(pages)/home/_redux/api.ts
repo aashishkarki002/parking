@@ -2,9 +2,11 @@ import { baseApiSlice } from '@/lib/public/baseApiSlice';
 
 // Match Django URLs used by Next app:
 //   POST /api/v1/parking/sessions/                      (scan/create)
+//   GET  /api/v1/parking/sessions/<ticket>               (read-only lookup, no side effects — used by the Stamp flow)
 //   POST /api/v1/parking/sessions/<ticket>/calculate-charge
 //   POST /api/v1/parking/sessions/<ticket>/mark-paid
 //   POST /api/v1/parking/sessions/<ticket>/apply-coupon
+//   POST /api/v1/parking/sessions/<ticket>/apply-stamp   (records a tenant's stamp; grants that tenant's free minutes)
 //   POST /api/v1/parking/sessions/tenant-card/scan       (preview only, no write)
 //   POST /api/v1/parking/sessions/tenant-card/confirm    (commits entry/exit)
 //   GET  /api/v1/parking/staff/?search=<name|plate>      (manual lookup for offline OTP entry)
@@ -14,9 +16,14 @@ import { baseApiSlice } from '@/lib/public/baseApiSlice';
 //   POST /api/v1/parking/parking-passes/                 (issue a monthly pass)
 export const scanApi = 'parking/sessions';
 export const staffApi = 'parking/staff';
+<<<<<<< HEAD
 export const vehicleTypesApi = 'parking/vehicle-types';
 export const vendorsApi = 'parking/vendors';
 export const parkingPassesApi = 'parking/parking-passes';
+=======
+export const vendorsApi = 'parking/vendors';
+export const vehicleTypesApi = 'parking/vehicle-types';
+>>>>>>> ed4b90cc8ed954f3b84bca4f54ca7ea383bd90f7
 
 export const scanApiSlice = baseApiSlice.injectEndpoints({
   endpoints: (builder) => ({
@@ -58,6 +65,25 @@ export const scanApiSlice = baseApiSlice.injectEndpoints({
           method: 'POST',
           data: {
             coupon_code,
+          },
+        };
+      },
+    }),
+    getSessionByTicket: builder.query({
+      query: (ticketNo: string) => {
+        return {
+          url: `${scanApi}/${ticketNo}`,
+          method: 'GET',
+        };
+      },
+    }),
+    applyStamp: builder.mutation({
+      query: ({ ticketNo, vendor_id }) => {
+        return {
+          url: `${scanApi}/${ticketNo}/apply-stamp`,
+          method: 'POST',
+          data: {
+            vendor_id,
           },
         };
       },
@@ -167,6 +193,40 @@ export const scanApiSlice = baseApiSlice.injectEndpoints({
       },
       invalidatesTags: ['ParkingPasses'],
     }),
+    getVendors: builder.query({
+      query: () => {
+        return {
+          url: vendorsApi,
+          method: 'GET',
+        };
+      },
+    }),
+    getVehicleTypes: builder.query({
+      query: () => {
+        return {
+          url: vehicleTypesApi,
+          method: 'GET',
+        };
+      },
+    }),
+    createStaff: builder.mutation({
+      query: (values) => {
+        return {
+          url: staffApi,
+          method: 'POST',
+          data: values,
+        };
+      },
+    }),
+    updateStaff: builder.mutation({
+      query: ({ id, ...values }) => {
+        return {
+          url: `${staffApi}/${id}`,
+          method: 'PATCH',
+          data: values,
+        };
+      },
+    }),
   }),
 });
 
@@ -178,13 +238,22 @@ export const {
   useTenantCardScanMutation,
   useTenantCardConfirmMutation,
   useLazySearchStaffQuery,
+  useLazyGetSessionByTicketQuery,
+  useApplyStampMutation,
   useGetSessionsQuery,
   useGetStaffQuery,
+<<<<<<< HEAD
   useCreateStaffMutation,
   useGetVehicleTypesQuery,
   useGetVendorsQuery,
   useCreateParkingPassMutation,
   useGetParkingPassesQuery,
   useUpdateParkingPassMutation,
+=======
+  useGetVendorsQuery,
+  useGetVehicleTypesQuery,
+  useCreateStaffMutation,
+  useUpdateStaffMutation,
+>>>>>>> ed4b90cc8ed954f3b84bca4f54ca7ea383bd90f7
 } = scanApiSlice;
 
