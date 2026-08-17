@@ -5,12 +5,6 @@ import { useNavigate } from 'react-router-dom';
 import {
   ArrowDown,
   ArrowUp,
-<<<<<<< HEAD
-  Moon,
-=======
-  BarChart3,
-  LineChart,
->>>>>>> ed4b90cc8ed954f3b84bca4f54ca7ea383bd90f7
   Plus,
 } from 'lucide-react';
 import { useGetSessionsQuery } from '@/app/(public)/(pages)/home/_redux/api';
@@ -24,6 +18,25 @@ import { cn } from '@/lib/utils';
 import { RevenueMixChart } from '@/components/dashboard/RevenueMixChart';
 import { MixCard } from '@/components/dashboard/MixCard';
 import { DARK_MIX_PALETTE, LIGHT_MIX_PALETTE, type MixSegment } from '@/components/dashboard/mix-types';
+import {
+  Pagination,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+
 
 type Theme = 'light' | 'dark';
 const THEME_STORAGE_KEY = 'parkflow-dashboard-theme';
@@ -43,8 +56,9 @@ interface ParkingSession {
 type Period = 'today' | 'week' | 'month';
 
 const PERIODS: { key: Period; label: string; noun: string }[] = [
-  { key: 'today', label: 'Today', noun: 'day' },
+
   { key: 'week', label: 'This week', noun: 'week' },
+  { key: 'today', label: 'Today', noun: 'day' },
   { key: 'month', label: 'This month', noun: 'month' },
 ];
 
@@ -94,6 +108,7 @@ const getSundayWeekStart = (offset: number): Date => {
 };
 
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const SESSIONS_PAGE_SIZE = 10;
 
 const humanizeLabel = (raw: string) =>
   raw
@@ -119,7 +134,7 @@ function buildMixSegments<T>(
   const sorted = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
   const top = sorted.slice(0, maxBuckets);
   const otherTotal = sorted.slice(maxBuckets).reduce((sum, [, v]) => sum + v, 0);
-  const buckets: [string, number][] = otherTotal > 0 ? [...top, ['Other', otherTotal]] : top;
+  const buckets: [string, number][] = otherTotal > 0 ? [...top, ['Covered by pass', otherTotal]] : top;
   const total = list.length;
   return buckets.map(([label, value], i) => ({
     label,
@@ -197,7 +212,7 @@ function KpiCell({
 
 const DashboardPage = () => {
   const navigate = useNavigate();
-  const [period, setPeriod] = useState<Period>('week');
+  const [period, setPeriod] = useState<Period>('today');
 
   const [theme] = useState<Theme>(
     () => (localStorage.getItem(THEME_STORAGE_KEY) as Theme | null) ?? 'light'
@@ -210,6 +225,9 @@ const DashboardPage = () => {
   const sessions: ParkingSession[] = data ?? [];
   const loading = isLoading;
   const error = isError ? 'Failed to load dashboard data.' : '';
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [page, setPage] = useState(1);
+
 
   const stats = useMemo(() => {
     const [curStart, curEnd] = getPeriodRange(period, 0);
@@ -247,6 +265,10 @@ const DashboardPage = () => {
       digitalRevenueChange: pctChange(digitalRevenue, digitalRevenuePrev),
     };
   }, [sessions, period]);
+  const statusOptions = useMemo(() => {
+    const set = new Set(sessions.map((s) => s.status));
+    return Array.from(set);
+  }, [sessions]);
 
   const periodNoun = PERIODS.find((p) => p.key === period)!.noun;
   const periodLabelLower = PERIODS.find((p) => p.key === period)!.label.toLowerCase();
@@ -307,7 +329,32 @@ const DashboardPage = () => {
       status: buildMixSegments(list, (s) => humanizeLabel(s.status), palette, 4),
     };
   }, [stats.curSessions, theme]);
+  const filteredSessions = useMemo(() => {
+    if (statusFilter === 'all') return sessions;
+    return sessions.filter((s) => s.status === statusFilter);
+  }, [sessions, statusFilter]);
+  const totalPages = Math.max(1, Math.ceil(filteredSessions.length / SESSIONS_PAGE_SIZE));
+  useEffect(() => {
+    setPage(1);
+  }, [statusFilter]);
+  useEffect(() => {
+    setPage((p) => Math.min(p, totalPages));
+  }, [totalPages]);
+  const getPageNumbers = (current: number, total: number): (number | 'ellipsis')[] => {
+    if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
 
+    const pages: (number | 'ellipsis')[] = [1];
+    if (current > 3) pages.push('ellipsis');
+
+    const start = Math.max(2, current - 1);
+    const end = Math.min(total - 1, current + 1);
+    for (let i = start; i <= end; i++) pages.push(i);
+
+    if (current < total - 2) pages.push('ellipsis');
+    pages.push(total);
+
+    return pages;
+  };
   return (
     <SidebarProvider>
       <AppSidebar />
@@ -374,7 +421,7 @@ const DashboardPage = () => {
                   }
                 />
                 <KpiCell
-                  label="Cars parked"
+                  label="Vehicle parked"
                   loading={loading}
                   value={stats.carsParked}
                   delta={stats.carsChange}
@@ -446,11 +493,32 @@ const DashboardPage = () => {
                   <CardTitle className="text-base font-semibold text-foreground">Recent sessions</CardTitle>
                 </CardHeader>
                 <CardContent className="p-4 pt-0 sm:p-6 sm:pt-0">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger render={<Button variant="outline" />}>
+                      Status: {statusFilter === 'all' ? 'All' : humanizeLabel(statusFilter)}
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent>
+                      <DropdownMenuGroup>
+                        <DropdownMenuLabel>Filter by status</DropdownMenuLabel>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem onClick={() => setStatusFilter('all')}>
+                          All statuses
+                        </DropdownMenuItem>
+                        {statusOptions.map((status) => (
+                          <DropdownMenuItem key={status} onClick={() => setStatusFilter(status)}>
+                            {humanizeLabel(status)}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuGroup>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                   {loading ? (
                     <div className="space-y-2">
+
                       {Array.from({ length: 5 }).map((_, i) => (
                         <Skeleton key={i} className="h-9 w-full" />
                       ))}
+
                     </div>
                   ) : (
                     <div className="overflow-x-auto">
@@ -465,7 +533,7 @@ const DashboardPage = () => {
                           </tr>
                         </thead>
                         <tbody>
-                          {sessions.slice(0, 20).map((s) => (
+                          {filteredSessions.slice((page - 1) * SESSIONS_PAGE_SIZE, page * SESSIONS_PAGE_SIZE).map((s) => (
                             <tr key={s.id} className="border-b border-border last:border-0 hover:bg-muted/40">
                               <td className="hidden max-w-[120px] truncate px-2 py-2 font-mono text-xs text-muted-foreground sm:table-cell">
                                 {s.ticket_number}
@@ -482,6 +550,60 @@ const DashboardPage = () => {
                           ))}
                         </tbody>
                       </table>
+                      <div className="mt-3 flex flex-col items-center justify-between gap-3 sm:flex-row">
+                        <span className="text-sm text-muted-foreground">
+                          {filteredSessions.length} sessions
+                        </span>
+
+                        {totalPages > 1 && (
+                          <Pagination className="mx-0 w-auto justify-end">
+                            <PaginationContent>
+                              <PaginationItem>
+                                <PaginationPrevious
+                                  href="#"
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    setPage((p) => Math.max(1, p - 1));
+                                  }}
+                                  className={page <= 1 ? 'pointer-events-none opacity-50' : undefined}
+                                />
+                              </PaginationItem>
+
+                              {getPageNumbers(page, totalPages).map((p, i) =>
+                                p === 'ellipsis' ? (
+                                  <PaginationItem key={`ellipsis-${i}`}>
+                                    <PaginationEllipsis />
+                                  </PaginationItem>
+                                ) : (
+                                  <PaginationItem key={p}>
+                                    <PaginationLink
+                                      href="#"
+                                      isActive={p === page}
+                                      onClick={(e) => {
+                                        e.preventDefault();
+                                        setPage(p);
+                                      }}
+                                    >
+                                      {p}
+                                    </PaginationLink>
+                                  </PaginationItem>
+                                )
+                              )}
+
+                              <PaginationItem>
+                                <PaginationNext
+                                  href="#"
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    setPage((p) => Math.min(totalPages, p + 1));
+                                  }}
+                                  className={page >= totalPages ? 'pointer-events-none opacity-50' : undefined}
+                                />
+                              </PaginationItem>
+                            </PaginationContent>
+                          </Pagination>
+                        )}
+                      </div>
                     </div>
                   )}
                 </CardContent>

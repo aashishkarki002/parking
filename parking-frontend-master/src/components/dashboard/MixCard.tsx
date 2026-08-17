@@ -1,4 +1,5 @@
 import type { MixSegment } from '@/components/dashboard/mix-types';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
 interface MixCardProps {
   title: string;
@@ -33,23 +34,34 @@ export function MixCard({ title, subtitle, segments, centerLabel }: MixCardProps
         ) : (
           <svg viewBox="0 0 100 100" className="h-[104px] w-[104px] -rotate-90">
             <circle cx={50} cy={50} r={R} fill="none" stroke="var(--muted)" strokeWidth={12} />
-            {arcs.map(({ seg, offset }, i) => {
-              const len = (seg.pct / 100) * CIRCUMFERENCE;
-              return (
-                <circle
-                  key={i}
-                  cx={50}
-                  cy={50}
-                  r={R}
-                  fill="none"
-                  stroke={seg.color}
-                  strokeWidth={12}
-                  strokeDasharray={`${len} ${CIRCUMFERENCE - len}`}
-                  strokeDashoffset={-((offset / 100) * CIRCUMFERENCE)}
-                  strokeLinecap={segments.length > 1 ? 'butt' : 'round'}
-                />
-              );
-            })}
+            <TooltipProvider>
+              {arcs.map(({ seg, offset }, i) => {
+                const len = (seg.pct / 100) * CIRCUMFERENCE;
+                return (
+                  <Tooltip key={i}>
+                    <TooltipTrigger
+                      render={
+                        <circle
+                          cx={50}
+                          cy={50}
+                          r={R}
+                          fill="none"
+                          stroke={seg.color}
+                          strokeWidth={12}
+                          strokeDasharray={`${len} ${CIRCUMFERENCE - len}`}
+                          strokeDashoffset={-((offset / 100) * CIRCUMFERENCE)}
+                          strokeLinecap={segments.length > 1 ? 'butt' : 'round'}
+                          className="cursor-default outline-none"
+                        />
+                      }
+                    />
+                    <TooltipContent side="top">
+                      {seg.label}: {seg.value} ({seg.pct}%)
+                    </TooltipContent>
+                  </Tooltip>
+                );
+              })}
+            </TooltipProvider>
             {centerLabel && (
               <text
                 x={50}

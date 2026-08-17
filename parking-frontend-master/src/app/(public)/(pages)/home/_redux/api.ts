@@ -16,14 +16,9 @@ import { baseApiSlice } from '@/lib/public/baseApiSlice';
 //   POST /api/v1/parking/parking-passes/                 (issue a monthly pass)
 export const scanApi = 'parking/sessions';
 export const staffApi = 'parking/staff';
-<<<<<<< HEAD
 export const vehicleTypesApi = 'parking/vehicle-types';
 export const vendorsApi = 'parking/vendors';
 export const parkingPassesApi = 'parking/parking-passes';
-=======
-export const vendorsApi = 'parking/vendors';
-export const vehicleTypesApi = 'parking/vehicle-types';
->>>>>>> ed4b90cc8ed954f3b84bca4f54ca7ea383bd90f7
 
 export const scanApiSlice = baseApiSlice.injectEndpoints({
   endpoints: (builder) => ({
@@ -193,31 +188,6 @@ export const scanApiSlice = baseApiSlice.injectEndpoints({
       },
       invalidatesTags: ['ParkingPasses'],
     }),
-    getVendors: builder.query({
-      query: () => {
-        return {
-          url: vendorsApi,
-          method: 'GET',
-        };
-      },
-    }),
-    getVehicleTypes: builder.query({
-      query: () => {
-        return {
-          url: vehicleTypesApi,
-          method: 'GET',
-        };
-      },
-    }),
-    createStaff: builder.mutation({
-      query: (values) => {
-        return {
-          url: staffApi,
-          method: 'POST',
-          data: values,
-        };
-      },
-    }),
     updateStaff: builder.mutation({
       query: ({ id, ...values }) => {
         return {
@@ -242,18 +212,12 @@ export const {
   useApplyStampMutation,
   useGetSessionsQuery,
   useGetStaffQuery,
-<<<<<<< HEAD
   useCreateStaffMutation,
   useGetVehicleTypesQuery,
   useGetVendorsQuery,
   useCreateParkingPassMutation,
   useGetParkingPassesQuery,
   useUpdateParkingPassMutation,
-=======
-  useGetVendorsQuery,
-  useGetVehicleTypesQuery,
-  useCreateStaffMutation,
   useUpdateStaffMutation,
->>>>>>> ed4b90cc8ed954f3b84bca4f54ca7ea383bd90f7
 } = scanApiSlice;
 
