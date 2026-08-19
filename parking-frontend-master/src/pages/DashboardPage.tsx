@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   ArrowDown,
   ArrowUp,
+  LayoutGrid,
   Plus,
 } from 'lucide-react';
 import { useGetSessionsQuery } from '@/app/(public)/(pages)/home/_redux/api';
@@ -15,8 +16,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { cn } from '@/lib/utils';
-import { RevenueMixChart } from '@/components/dashboard/RevenueMixChart';
-import { MixCard } from '@/components/dashboard/MixCard';
+import { RevenueMixChart, RevenueMixChartSkeleton } from '@/components/dashboard/RevenueMixChart';
+import { MixCard, MixCardSkeleton } from '@/components/dashboard/MixCard';
 import { DARK_MIX_PALETTE, LIGHT_MIX_PALETTE, type MixSegment } from '@/components/dashboard/mix-types';
 import {
   Pagination,
@@ -401,6 +402,20 @@ const DashboardPage = () => {
         </div>
 
         <div className="px-4 py-4 sm:px-6 sm:py-6 ">
+          <div className="mb-4 flex flex-wrap items-end justify-between gap-4">
+            <div>
+
+              <div className=" text-xs text-muted-foreground">Good morning, Aashish</div>
+              <h1 className="mt-0.5 text-2xl font-bold tracking-tight text-foreground sm:text-[26px]">
+                Parking overview
+              </h1>
+              <div className="mt-1.5 text-xs text-muted-foreground">
+                Live snapshot of permits, occupancy and revenue across{' '}
+                <b className="font-semibold text-foreground/90">Sallyan House</b>.
+              </div>
+            </div>
+          </div>
+
           {error ? (
             <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-400">
               {error}
@@ -459,7 +474,9 @@ const DashboardPage = () => {
               </div>
 
               {loading ? (
-                <Skeleton className="mt-4 h-[340px] w-full rounded-xl" />
+                <div className="mt-4">
+                  <RevenueMixChartSkeleton />
+                </div>
               ) : (
                 <div className="mt-4">
                   <RevenueMixChart
@@ -473,7 +490,11 @@ const DashboardPage = () => {
 
               <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
                 {loading ? (
-                  Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-[260px] w-full rounded-xl" />)
+                  <>
+                    <MixCardSkeleton legendRows={3} />
+                    <MixCardSkeleton legendRows={4} />
+                    <MixCardSkeleton legendRows={4} />
+                  </>
                 ) : (
                   <>
                     <MixCard
@@ -513,12 +534,39 @@ const DashboardPage = () => {
                     </DropdownMenuContent>
                   </DropdownMenu>
                   {loading ? (
-                    <div className="space-y-2">
-
-                      {Array.from({ length: 5 }).map((_, i) => (
-                        <Skeleton key={i} className="h-9 w-full" />
-                      ))}
-
+                    <div className="mt-2 overflow-x-auto">
+                      <table className="w-full border-collapse text-sm">
+                        <thead>
+                          <tr className="border-b border-border text-left text-xs font-medium text-muted-foreground uppercase">
+                            <th className="hidden px-2 py-2 sm:table-cell">Ticket</th>
+                            <th className="px-2 py-2">Plate</th>
+                            <th className="px-2 py-2">Status</th>
+                            <th className="hidden px-2 py-2 md:table-cell">Entry Time</th>
+                            <th className="px-2 py-2 text-right">Charge</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {Array.from({ length: 5 }).map((_, i) => (
+                            <tr key={i} className="border-b border-border last:border-0">
+                              <td className="hidden px-2 py-2.5 sm:table-cell">
+                                <Skeleton className="h-3.5 w-16" />
+                              </td>
+                              <td className="px-2 py-2.5">
+                                <Skeleton className="h-3.5 w-20" />
+                              </td>
+                              <td className="px-2 py-2.5">
+                                <Skeleton className="h-3.5 w-24" />
+                              </td>
+                              <td className="hidden px-2 py-2.5 md:table-cell">
+                                <Skeleton className="h-3.5 w-32" />
+                              </td>
+                              <td className="px-2 py-2.5">
+                                <Skeleton className="ml-auto h-3.5 w-14" />
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
                     </div>
                   ) : (
                     <div className="overflow-x-auto">

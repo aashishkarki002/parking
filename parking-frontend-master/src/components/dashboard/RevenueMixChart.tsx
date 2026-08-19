@@ -1,6 +1,7 @@
 import { TrendingDown, TrendingUp } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, XAxis } from 'recharts';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
 import {
   ChartContainer,
   ChartLegend,
@@ -9,6 +10,37 @@ import {
   ChartTooltipContent,
   type ChartConfig,
 } from '@/components/ui/chart';
+
+// Rough weekday bar heights so the loading state reads as "a bar chart is
+// coming" instead of a generic gray rectangle. Deliberately uneven, like
+// real revenue data — not a repeating pattern.
+const SKELETON_BAR_HEIGHTS = [46, 78, 58, 92, 64, 100, 70];
+
+export function RevenueMixChartSkeleton() {
+  return (
+    <Card>
+      <CardHeader className="flex flex-col gap-1 p-4 pb-2 sm:p-6 sm:pb-3">
+        <Skeleton className="h-4 w-32" />
+        <Skeleton className="h-3.5 w-52" />
+      </CardHeader>
+      <CardContent className="p-4 pt-2 sm:p-6 sm:pt-2">
+        <div className="flex h-[220px] items-end justify-between gap-2 border-b border-border px-1 pb-6">
+          {SKELETON_BAR_HEIGHTS.map((h, i) => (
+            <Skeleton key={i} className="w-full rounded-t-md rounded-b-none" style={{ height: `${h}%` }} />
+          ))}
+        </div>
+        <div className="mt-2 flex justify-center gap-4">
+          <Skeleton className="h-3 w-16" />
+          <Skeleton className="h-3 w-20" />
+        </div>
+      </CardContent>
+      <CardFooter className="flex-col items-start gap-1 p-4 pt-0 text-sm sm:p-6 sm:pt-0">
+        <Skeleton className="h-4 w-64" />
+        <Skeleton className="mt-1 h-3.5 w-48" />
+      </CardFooter>
+    </Card>
+  );
+}
 
 const revenueChartConfig = {
   cash: { label: 'Cash', color: 'var(--chart-2)' },

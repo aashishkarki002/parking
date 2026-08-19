@@ -41,9 +41,12 @@ interface PassStaff {
 interface ParkingPassRow {
   id: number;
   staff: PassStaff;
+  extra_vehicles: PassStaff[];
   valid_from: string;
   valid_until: string;
   price_paid: string;
+  payment_method: string;
+  reminder_enabled: boolean;
   is_active: boolean;
   notes: string;
 }
@@ -114,12 +117,22 @@ const termBucketOf = (p: ParkingPassRow): '1' | '3' | '6' | 'OTHER' => {
 
 const staffCode = (id: number) => `STAFF-${String(id).padStart(3, '0')}`;
 
+const vehiclesOf = (pass: ParkingPassRow): PassStaff[] => [pass.staff, ...(pass.extra_vehicles ?? [])];
+
 const csvEscape = (value: string) => (/[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value);
 
 const toCsv = (rows: ParkingPassRow[]) => {
-  const headers = ['Staff', 'Plate', 'Vehicle', 'Valid from', 'Valid until', 'Price paid', 'Active'];
+  const headers = ['Staff', 'Plates', 'Valid from', 'Valid until', 'Price paid', 'Payment method', 'Active'];
   const lines = rows.map((r) =>
-    [r.staff.name, r.staff.license_plate, r.staff.vehicle_type ?? '', r.valid_from, r.valid_until, r.price_paid, String(r.is_active)]
+    [
+      r.staff.name,
+      vehiclesOf(r).map((v) => v.license_plate).join(' / '),
+      r.valid_from,
+      r.valid_until,
+      r.price_paid,
+      r.payment_method,
+      String(r.is_active),
+    ]
       .map((v) => csvEscape(String(v)))
       .join(',')
   );
@@ -232,12 +245,14 @@ const SubscriptionsPage = () => {
   const stats = useMemo(() => {
     const active = rows.filter((r) => r.status === 'ACTIVE' || r.status === 'DUE_SOON');
     const monthlyRecurring = active.reduce((sum, r) => sum + Number(r.pass.price_paid) / termMonthsOf(r.pass), 0);
+    const vehiclesCovered = active.reduce((sum, r) => sum + vehiclesOf(r.pass).length, 0);
     const dueSoon = rows.filter((r) => r.status === 'DUE_SOON');
     const dueSoonWorth = dueSoon.reduce((sum, r) => sum + Number(r.pass.price_paid), 0);
     const lapsed = rows.filter((r) => r.status === 'LAPSED').sort((a, b) => dayjs(b.pass.valid_until).diff(dayjs(a.pass.valid_until)));
 
     return {
       activeCount: active.length,
+      vehiclesCovered,
       monthlyRecurring,
       dueSoonCount: dueSoon.length,
       dueSoonWorth,
@@ -269,7 +284,10 @@ const SubscriptionsPage = () => {
   const pageAllSelected = pageRows.length > 0 && pageRows.every((r) => selected.has(r.pass.id));
 
   const eligibleStaffIds = useMemo(() => {
-    const covered = new Set(rows.filter((r) => r.status === 'ACTIVE' || r.status === 'DUE_SOON').map((r) => r.pass.staff.id));
+    const covered = new Set<number>();
+    rows
+      .filter((r) => r.status === 'ACTIVE' || r.status === 'DUE_SOON')
+      .forEach((r) => vehiclesOf(r.pass).forEach((v) => covered.add(v.id)));
     return new Set(staff.filter((s) => !covered.has(s.id)).map((s) => s.id));
   }, [rows, staff]);
 
@@ -277,9 +295,9 @@ const SubscriptionsPage = () => {
     return rows
       .filter((r) => r.status === 'LAPSED')
       .map(({ pass }) => {
-        const key = `${pass.staff.name} - ${pass.staff.license_plate}`;
+        const keys = new Set(vehiclesOf(pass).map((v) => `${v.name} - ${v.license_plate}`));
         const sessionsSince = sessions.filter(
-          (s) => s.registered_staff_member === key && dayjs(s.entry_time).isAfter(dayjs(pass.valid_until))
+          (s) => s.registered_staff_member !== null && keys.has(s.registered_staff_member) && dayjs(s.entry_time).isAfter(dayjs(pass.valid_until))
         );
         const unbilled = sessionsSince
           .filter((s) => s.status === 'COMPLETED')
@@ -467,7 +485,7 @@ const SubscriptionsPage = () => {
             <KpiTile
               label="Active passes"
               value={stats.activeCount}
-              caption={`${stats.lapsedCount} lapsed · ${stats.activeCount} vehicles covered`}
+              caption={`${stats.vehiclesCovered} vehicle${stats.vehiclesCovered === 1 ? '' : 's'} covered · ${stats.lapsedCount} lapsed`}
             />
             <KpiTile
               label="Monthly recurring"
@@ -611,7 +629,7 @@ const SubscriptionsPage = () => {
                     </TableRow>
                   ) : (
                     pageRows.map(({ pass, status }, i) => {
-                      const VehicleIcon = vehicleIconFor(pass.staff.vehicle_type || '');
+                      const vehicles = vehiclesOf(pass);
                       const daysLeft = dayjs(pass.valid_until).diff(now, 'day');
                       const totalDays = Math.max(1, dayjs(pass.valid_until).diff(dayjs(pass.valid_from), 'day'));
                       const elapsedDays = Math.min(totalDays, Math.max(0, now.diff(dayjs(pass.valid_from), 'day')));
@@ -653,10 +671,20 @@ const SubscriptionsPage = () => {
                             </div>
                           </TableCell>
                           <TableCell className="px-3 py-2.5">
-                            <span className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2 py-1 font-mono text-[11px] font-semibold text-foreground">
-                              <VehicleIcon className="h-3 w-3 text-muted-foreground" />
-                              {pass.staff.license_plate}
-                            </span>
+                            <div className="flex flex-col items-start gap-1">
+                              {vehicles.map((v) => {
+                                const Icon = vehicleIconFor(v.vehicle_type || '');
+                                return (
+                                  <span
+                                    key={v.id}
+                                    className="inline-flex items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2 py-1 font-mono text-[11px] font-semibold text-foreground"
+                                  >
+                                    <Icon className="h-3 w-3 text-muted-foreground" />
+                                    {v.license_plate}
+                                  </span>
+                                );
+                              })}
+                            </div>
                           </TableCell>
                           <TableCell className="px-3 py-2.5">
                             <div className="flex min-w-[150px] flex-col gap-1">
@@ -809,7 +837,10 @@ const SubscriptionsPage = () => {
                         </span>
                         <span className="min-w-0 flex-1">
                           <span className="block truncate text-[12px] font-semibold text-foreground">{pass.staff.name}</span>
-                          <span className="block text-[10.5px] text-muted-foreground">{staffCode(pass.staff.id)}</span>
+                          <span className="block text-[10.5px] text-muted-foreground">
+                            {staffCode(pass.staff.id)}
+                            {pass.extra_vehicles?.length > 0 && ` · ${pass.extra_vehicles.length + 1} vehicles`}
+                          </span>
                         </span>
                         <span className="font-mono text-[11.5px] font-bold text-foreground">{formatAmount(pass.price_paid)}</span>
                       </div>

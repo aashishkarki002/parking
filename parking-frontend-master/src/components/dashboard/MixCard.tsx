@@ -1,11 +1,37 @@
 import type { MixSegment } from '@/components/dashboard/mix-types';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Skeleton } from '@/components/ui/skeleton';
 
 interface MixCardProps {
   title: string;
   subtitle?: string;
   segments: MixSegment[];
   centerLabel?: string;
+}
+
+export function MixCardSkeleton({ legendRows = 3 }: { legendRows?: number }) {
+  return (
+    <div className="flex flex-col gap-4 rounded-xl border border-border bg-card p-4">
+      <div className="flex items-center gap-2">
+        <Skeleton className="h-4 w-24" />
+        <Skeleton className="ml-auto h-3 w-14" />
+      </div>
+
+      <div className="flex items-center justify-center py-1">
+        <Skeleton className="h-[104px] w-[104px] rounded-full" />
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        {Array.from({ length: legendRows }).map((_, i) => (
+          <div key={i} className="flex items-center gap-2">
+            <Skeleton className="h-2 w-2 shrink-0 rounded-[2px]" />
+            <Skeleton className="h-3 flex-1" style={{ maxWidth: `${70 - i * 12}%` }} />
+            <Skeleton className="h-3 w-7 shrink-0" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 const R = 40;

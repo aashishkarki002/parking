@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import dayjs from 'dayjs';
-import { Check, Info, Loader2 } from 'lucide-react';
+import { Check, Info, Loader2, Plus, X } from 'lucide-react';
 import { toast } from 'react-toastify';
 import { useCreateParkingPassMutation } from '@/app/(public)/(pages)/home/_redux/api';
 import { Button } from '@/components/ui/button';
@@ -16,9 +16,17 @@ import {
 } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { Checkbox } from '@/components/ui/checkbox';
 import { vehicleIconFor } from '@/functions/vehicleIcon';
 
 const STANDARD_MONTHLY_RATE = 5000;
+
+const PAYMENT_METHODS: Array<{ value: string; label: string }> = [
+  { value: 'CASH', label: 'Cash' },
+  { value: 'BANK_TRANSFER', label: 'Bank transfer' },
+  { value: 'CHEQUE', label: 'Cheque' },
+  { value: 'SALARY_DEDUCTION', label: 'Salary deduction' },
+];
 
 interface StaffOption {
   id: number;
@@ -41,10 +49,13 @@ const formatNRs = (amount: number) =>
 
 const emptyForm = {
   staffId: '' as number | '',
+  extraVehicleIds: [] as number[],
   term: '1' as Term,
   validFrom: dayjs().format('YYYY-MM-DD'),
   validUntil: '',
   pricePaid: String(STANDARD_MONTHLY_RATE),
+  paymentMethod: 'CASH',
+  reminderEnabled: false,
   notes: '',
 };
 
@@ -71,6 +82,24 @@ export function AddSubscriptionDialog({ open, onOpenChange, staffOptions, eligib
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, eligibleStaff.length]);
+
+  // Reset any extra vehicles that stop being eligible once the primary staff member changes.
+  useEffect(() => {
+    setForm((f) => (f.extraVehicleIds.length ? { ...f, extraVehicleIds: [] } : f));
+  }, [form.staffId]);
+
+  const extraVehicleOptions = useMemo(
+    () => eligibleStaff.filter((s) => s.id !== form.staffId && !form.extraVehicleIds.includes(s.id)),
+    [eligibleStaff, form.staffId, form.extraVehicleIds]
+  );
+  const extraVehicles = useMemo(
+    () => form.extraVehicleIds.map((id) => staffOptions.find((s) => s.id === id)).filter((s): s is StaffOption => !!s),
+    [form.extraVehicleIds, staffOptions]
+  );
+
+  const addExtraVehicle = (id: number) => setForm((f) => ({ ...f, extraVehicleIds: [...f.extraVehicleIds, id] }));
+  const removeExtraVehicle = (id: number) =>
+    setForm((f) => ({ ...f, extraVehicleIds: f.extraVehicleIds.filter((v) => v !== id) }));
 
   const isCustom = form.term === 'custom';
   const termMonths = isCustom ? 0 : Number(form.term);
@@ -119,12 +148,17 @@ export function AddSubscriptionDialog({ open, onOpenChange, staffOptions, eligib
     try {
       await createParkingPass({
         staff_id: selectedStaff.id,
+        extra_vehicle_ids: form.extraVehicleIds,
         valid_from: dayjs(form.validFrom).startOf('day').toISOString(),
         valid_until: dayjs(computedValidUntil).endOf('day').toISOString(),
         price_paid: priceValue,
+        payment_method: form.paymentMethod,
+        reminder_enabled: form.reminderEnabled,
         notes: form.notes.trim(),
       }).unwrap();
-      toast.success(`Subscription pass issued to ${selectedStaff.name}.`);
+      toast.success(
+        `Subscription pass issued to ${selectedStaff.name}${extraVehicles.length ? ` (+${extraVehicles.length} vehicle${extraVehicles.length === 1 ? '' : 's'})` : ''}.`
+      );
       onOpenChange(false);
     } catch {
       // axios interceptor already surfaces field errors as a toast
@@ -164,23 +198,74 @@ export function AddSubscriptionDialog({ open, onOpenChange, staffOptions, eligib
                     </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
-                    {eligibleStaff.map((s) => (
-                      <SelectItem key={s.id} value={String(s.id)}>
-                        {s.name} — {s.license_plate}
-                      </SelectItem>
-                    ))}
+                    {eligibleStaff
+                      .filter((s) => !form.extraVehicleIds.includes(s.id))
+                      .map((s) => (
+                        <SelectItem key={s.id} value={String(s.id)}>
+                          {s.name} — {s.license_plate}
+                        </SelectItem>
+                      ))}
                   </SelectContent>
                 </Select>
               )}
-              {selectedStaff && (
-                <span className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
-                  {(() => {
-                    const Icon = vehicleIconFor(selectedStaff.vehicle_type || '');
-                    return <Icon className="h-3.5 w-3.5" />;
-                  })()}
-                  {selectedStaff.vehicle_type || 'Vehicle'} · covers this one vehicle only
-                </span>
-              )}
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <label className="text-[10px] font-semibold tracking-[0.09em] text-muted-foreground uppercase">
+                Vehicles on this pass<span className="ml-1.5 font-medium text-muted-foreground/70 normal-case">one price covers every vehicle listed</span>
+              </label>
+              <div className="flex min-h-10 flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/30 p-2">
+                {selectedStaff && (
+                  <span className="inline-flex items-center gap-1.5 rounded-md border border-primary/25 bg-accent px-2.5 py-1 font-mono text-[11px] font-bold tracking-tight text-accent-foreground">
+                    {(() => {
+                      const Icon = vehicleIconFor(selectedStaff.vehicle_type || '');
+                      return <Icon className="h-3 w-3" />;
+                    })()}
+                    {selectedStaff.license_plate}
+                  </span>
+                )}
+                {extraVehicles.map((v) => (
+                  <span
+                    key={v.id}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-primary/25 bg-accent px-2.5 py-1 font-mono text-[11px] font-bold tracking-tight text-accent-foreground"
+                  >
+                    {(() => {
+                      const Icon = vehicleIconFor(v.vehicle_type || '');
+                      return <Icon className="h-3 w-3" />;
+                    })()}
+                    {v.license_plate}
+                    <button
+                      type="button"
+                      onClick={() => removeExtraVehicle(v.id)}
+                      aria-label={`Remove ${v.license_plate} from this pass`}
+                      className="opacity-70 hover:opacity-100"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                ))}
+                {extraVehicleOptions.length > 0 && (
+                  <Select value="" onValueChange={(value) => addExtraVehicle(Number(value))}>
+                    <SelectTrigger
+                      size="sm"
+                      className="h-7 w-auto gap-1 rounded-md border-dashed px-2.5 text-[11px] font-semibold text-muted-foreground shadow-none"
+                    >
+                      <Plus className="h-3 w-3" />
+                      <SelectValue placeholder="Add vehicle" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {extraVehicleOptions.map((s) => (
+                        <SelectItem key={s.id} value={String(s.id)}>
+                          {s.name} — {s.license_plate}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+              <span className="text-[11px] text-muted-foreground">
+                Only one of the listed vehicles may be inside the lot at a time.
+              </span>
             </div>
 
             <div className="flex items-center gap-3 text-[10px] font-semibold tracking-[0.12em] text-muted-foreground/80 uppercase">
@@ -255,7 +340,27 @@ export function AddSubscriptionDialog({ open, onOpenChange, staffOptions, eligib
                 />
                 <span className="text-[11px] text-muted-foreground">Override for pro-rated or discounted passes.</span>
               </div>
-              <div className="flex flex-col gap-1.5 sm:col-span-1">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[10px] font-semibold tracking-[0.09em] text-muted-foreground uppercase">Payment method</label>
+                <Select
+                  value={form.paymentMethod}
+                  onValueChange={(value) => value && setForm((f) => ({ ...f, paymentMethod: value }))}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue>
+                      {(value: string | null) => PAYMENT_METHODS.find((m) => m.value === value)?.label ?? 'Cash'}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PAYMENT_METHODS.map((m) => (
+                      <SelectItem key={m.value} value={m.value}>
+                        {m.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="col-span-2 flex flex-col gap-1.5">
                 <label className="text-[10px] font-semibold tracking-[0.09em] text-muted-foreground uppercase">
                   Notes <span className="font-medium text-muted-foreground/70 normal-case">optional</span>
                 </label>
@@ -268,6 +373,14 @@ export function AddSubscriptionDialog({ open, onOpenChange, staffOptions, eligib
                 />
               </div>
             </div>
+
+            <label className="flex cursor-pointer items-center gap-2.5 text-[12.5px] font-medium text-foreground">
+              <Checkbox
+                checked={form.reminderEnabled}
+                onCheckedChange={(checked) => setForm((f) => ({ ...f, reminderEnabled: checked === true }))}
+              />
+              Send a renewal reminder 7 days before this pass ends
+            </label>
 
             <div className="flex items-start gap-2.5 rounded-lg border border-primary/20 bg-accent px-3.5 py-3 text-[12px] leading-relaxed font-medium text-accent-foreground">
               <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
