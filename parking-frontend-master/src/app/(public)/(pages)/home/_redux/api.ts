@@ -16,8 +16,8 @@ import { baseApiSlice } from '@/lib/public/baseApiSlice';
 //   POST /api/v1/parking/parking-passes/                 (issue a monthly pass)
 export const scanApi = 'parking/sessions';
 export const staffApi = 'parking/staff';
-export const vehicleTypesApi = 'parking/vehicle-types';
 export const vendorsApi = 'parking/vendors';
+export const vehicleTypesApi = 'parking/vehicle-types';
 export const parkingPassesApi = 'parking/parking-passes';
 
 export const scanApiSlice = baseApiSlice.injectEndpoints({
