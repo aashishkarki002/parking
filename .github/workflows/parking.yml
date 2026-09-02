@@ -13,7 +13,30 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # 2️⃣ FTP Deploy
+      # 2️⃣ Write per-environment settings from GitHub Secrets.
+      # This file is gitignored, so it only exists on the runner because we
+      # create it here. It must be generated BEFORE the FTP step so it ships
+      # with the rest of the code -- and because it is always present at
+      # deploy time, the sync never sees it as deleted.
+      - name: Generate production settings
+        env:
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DJANGO_SECRET_KEY: ${{ secrets.DJANGO_SECRET_KEY }}
+          EMAIL_HOST_PASSWORD: ${{ secrets.EMAIL_HOST_PASSWORD }}
+          PARKING_WEBHOOK_SECRET: ${{ secrets.PARKING_WEBHOOK_SECRET }}
+          EASYMANAGE_INTEGRATION_API_KEY: ${{ secrets.EASYMANAGE_INTEGRATION_API_KEY }}
+          EASYMANAGE_API_BASE_URL: ${{ secrets.EASYMANAGE_API_BASE_URL }}
+          PARKING_READ_API_KEY: ${{ secrets.PARKING_READ_API_KEY }}
+          DEV_SYNC_TOKEN: ${{ secrets.DEV_SYNC_TOKEN }}
+          RESTART_TOKEN: ${{ secrets.RESTART_TOKEN }}
+          ALLOWED_HOST: backend.parking.sallyanhouse.com
+        run: python3 .github/scripts/gen_local_settings.py
+
+      # 3️⃣ FTP Deploy
       - name: FTP Deploy
       
         uses: SamKirkland/FTP-Deploy-Action@v4.3.4
@@ -31,8 +54,8 @@ jobs:
             *.zip
           dangerous-clean-slate: false
 
-      # 3️⃣ Restart Passenger & install dependencies
-      - name: Restart Passenger & Install Dependencies
+      # 4️⃣ Restart Passenger
+      - name: Restart Passenger
         run: |
           response=$(curl -s -w "\n%{http_code}" -X POST \
             -H "X-Restart-Token: ${{ secrets.RESTART_TOKEN }}" \
