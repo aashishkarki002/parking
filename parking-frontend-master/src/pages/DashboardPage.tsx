@@ -405,11 +405,9 @@ const DashboardPage = () => {
           <div className="mb-4 flex flex-wrap items-end justify-between gap-4">
             <div>
 
-              <div className=" text-xs text-muted-foreground">Good morning, Aashish</div>
-              <h1 className="mt-0.5 text-2xl font-bold tracking-tight text-foreground sm:text-[26px]">
-                Parking overview
-              </h1>
-              <div className="mt-1.5 text-xs text-muted-foreground">
+
+
+              <div className=" text-xs text-muted-foreground">
                 Live snapshot of permits, occupancy and revenue across{' '}
                 <b className="font-semibold text-foreground/90">Sallyan House</b>.
               </div>
@@ -510,10 +508,9 @@ const DashboardPage = () => {
               </div>
 
               <Card className="mt-4">
-                <CardHeader className="p-4 pb-2 sm:p-6 sm:pb-3">
+
+                <CardHeader className="p-4 pb-2 sm:p-6 sm:pb-3 ">
                   <CardTitle className="text-base font-semibold text-foreground">Recent sessions</CardTitle>
-                </CardHeader>
-                <CardContent className="p-4 pt-0 sm:p-6 sm:pt-0">
                   <DropdownMenu>
                     <DropdownMenuTrigger render={<Button variant="outline" />}>
                       Status: {statusFilter === 'all' ? 'All' : humanizeLabel(statusFilter)}
@@ -533,6 +530,9 @@ const DashboardPage = () => {
                       </DropdownMenuGroup>
                     </DropdownMenuContent>
                   </DropdownMenu>
+                </CardHeader>
+                <CardContent className="p-4 pt-0 sm:p-6 sm:pt-0">
+
                   {loading ? (
                     <div className="mt-2 overflow-x-auto">
                       <table className="w-full border-collapse text-sm">

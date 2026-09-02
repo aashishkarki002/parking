@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { Download, Plus, Search, X } from 'lucide-react';
 import { toast } from 'react-toastify';
@@ -184,9 +185,19 @@ const SessionsPage = () => {
   const [closeSession] = usePrintBillMutation();
   const [markPaid] = usePaymentMethodMutation();
 
-  const [tab, setTab] = useState<SessionStatus | 'ALL'>('ALL');
+  // Seeded once from the URL so links from the sidebar (e.g. Sessions ›
+  // Unpaid exits) land on the right filter without fighting local state
+  // changes afterwards.
+  const [searchParams] = useSearchParams();
+  const [tab, setTab] = useState<SessionStatus | 'ALL'>(() => {
+    const fromUrl = searchParams.get('tab');
+    return TABS.some((t) => t.key === fromUrl) ? (fromUrl as SessionStatus | 'ALL') : 'ALL';
+  });
   const [vehicleFilter, setVehicleFilter] = useState('ALL');
-  const [paymentFilter, setPaymentFilter] = useState<'ALL' | 'CASH' | 'ONLINE_PAYMENT' | 'UNPAID'>('ALL');
+  const [paymentFilter, setPaymentFilter] = useState<'ALL' | 'CASH' | 'ONLINE_PAYMENT' | 'UNPAID'>(() => {
+    const fromUrl = searchParams.get('payment');
+    return fromUrl === 'CASH' || fromUrl === 'ONLINE_PAYMENT' || fromUrl === 'UNPAID' ? fromUrl : 'ALL';
+  });
   const [entryFilter, setEntryFilter] = useState<'ALL' | 'TODAY'>('ALL');
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(0);

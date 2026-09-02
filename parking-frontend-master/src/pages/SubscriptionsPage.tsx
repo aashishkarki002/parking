@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { Clock10Icon, Download, Plus, RefreshCcw, Search, TriangleAlert, X } from 'lucide-react';
 import { toast } from 'react-toastify';
@@ -218,7 +218,14 @@ const SubscriptionsPage = () => {
 
   const [updatePass] = useUpdateParkingPassMutation();
 
-  const [tab, setTab] = useState<PassStatus | 'ALL'>('ALL');
+  // Seeded once from the URL so links from the sidebar (e.g. Subscriptions ›
+  // Renewals due) land on the right tab without fighting local state
+  // changes afterwards.
+  const [searchParams] = useSearchParams();
+  const [tab, setTab] = useState<PassStatus | 'ALL'>(() => {
+    const fromUrl = searchParams.get('tab');
+    return TABS.some((t) => t.key === fromUrl) ? (fromUrl as PassStatus | 'ALL') : 'ALL';
+  });
   const [termFilter, setTermFilter] = useState<'ALL' | '1' | '3' | '6' | 'OTHER'>('ALL');
   const [windowFilter, setWindowFilter] = useState<'ALL' | '30' | '90'>('ALL');
   const [search, setSearch] = useState('');
