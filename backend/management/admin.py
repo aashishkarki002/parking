@@ -312,11 +312,11 @@ class CouponAdmin(BaseAdmin):
 
 @admin.register(ParkingPass, site=parking_admin_site)
 class ParkingPassAdmin(BaseAdmin):
-    list_display = ('staff', 'valid_from', 'valid_until', 'price_paid', 'is_active', 'print_pass_link',
-                    'email_pass_link')
-    search_fields = ('staff__name', 'staff__license_plate')
-    list_filter = ('is_active',)
-    autocomplete_fields = ('staff',)
+    list_display = ('staff', 'valid_from', 'valid_until', 'price_paid', 'payment_method', 'is_active',
+                    'print_pass_link', 'email_pass_link')
+    search_fields = ('staff__name', 'staff__license_plate', 'extra_vehicles__name', 'extra_vehicles__license_plate')
+    list_filter = ('is_active', 'payment_method', 'reminder_enabled')
+    autocomplete_fields = ('staff', 'extra_vehicles')
 
     def print_pass_link(self, obj):
         return format_html(

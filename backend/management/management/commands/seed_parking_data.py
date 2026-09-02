@@ -56,11 +56,13 @@ SAMPLE_MODELS_CHILD_FIRST = [
 VEHICLE_TYPE_SPECS = [
     {
         "name": "Motorcycle",
+        "category": "BIKE",
         "free_duration_minutes": 5,
         "plan": {"plan_type": "HOURLY", "rate_details": {"rate_per_hour": "30.00"}, "minimum_charge": Decimal("15.00")},
     },
     {
         "name": "Car",
+        "category": "CAR",
         "free_duration_minutes": 10,
         "plan": {
             "plan_type": "TIERED_HOURLY",
@@ -74,15 +76,23 @@ VEHICLE_TYPE_SPECS = [
     },
     {
         "name": "Van / SUV",
+        "category": "CAR",
         "free_duration_minutes": 10,
         "plan": {"plan_type": "HOURLY", "rate_details": {"rate_per_hour": "50.00"}, "minimum_charge": Decimal("25.00")},
     },
     {
         "name": "Bus / Truck",
+        "category": "CAR",
         "free_duration_minutes": 0,
         "plan": {"plan_type": "FLAT_RATE_PER_DAY", "rate_details": {"rate_per_day": "500.00"}, "minimum_charge": Decimal("0.00")},
     },
 ]
+
+# Headroom added on top of however many car/bike staff a vendor ends up with,
+# so sample vendors aren't sitting at 0 remaining quota (StaffSerializer.validate
+# would reject any new staff added through the UI otherwise) but the numbers
+# still look plausible relative to the seeded staff count.
+QUOTA_HEADROOM_RANGE = (2, 5)
 
 VENDOR_NAMES = [
     "Corporate HQ",
@@ -133,6 +143,7 @@ class Command(BaseCommand):
             vendors = self._create_vendors()
             vehicle_types = self._create_vehicle_types()
             staff = self._create_staff(count, vendors, vehicle_types)
+            self._update_vendor_quotas(vendors, staff)
             coupons = self._create_coupons(vendors)
             self._create_parking_passes(staff)
             sessions = self._create_parking_sessions(count, vehicle_types, staff, coupons)
@@ -195,6 +206,7 @@ class Command(BaseCommand):
                 defaults={
                     "pricing_plan": plan,
                     "free_duration_minutes": spec["free_duration_minutes"],
+                    "category": spec["category"],
                     "is_sample": True,
                 },
             )
@@ -221,6 +233,22 @@ class Command(BaseCommand):
             )
             staff.append(member)
         return staff
+
+    def _update_vendor_quotas(self, vendors, staff):
+        # car_quota/bike_quota are normally cached from EasyManage (see
+        # Vendor's docstring) and default to 0 — leave the other sync-cache
+        # fields (external_tenant_id, sync_source, last_synced_at) null so
+        # sample vendors read as plain manually-created ones rather than
+        # claiming to be synced from a real EasyManage tenant.
+        for vendor in vendors:
+            vendor_staff = [s for s in staff if s.company_id == vendor.id]
+            car_count = sum(
+                1 for s in vendor_staff if s.vehicle_type and s.vehicle_type.category == "CAR")
+            bike_count = sum(
+                1 for s in vendor_staff if s.vehicle_type and s.vehicle_type.category == "BIKE")
+            vendor.car_quota = car_count + random.randint(*QUOTA_HEADROOM_RANGE)
+            vendor.bike_quota = bike_count + random.randint(*QUOTA_HEADROOM_RANGE)
+            vendor.save(update_fields=["car_quota", "bike_quota"])
 
     def _create_coupons(self, vendors):
         coupons = []
@@ -278,6 +306,7 @@ class Command(BaseCommand):
     def _create_parking_passes(self, staff):
         now = timezone.now()
         passes = []
+        covered_ids = set()
         for member in staff:
             if random.random() > 0.4:
                 continue
@@ -288,10 +317,24 @@ class Command(BaseCommand):
                 valid_from=now - timedelta(days=starts_days_ago),
                 valid_until=now - timedelta(days=starts_days_ago) + timedelta(days=duration_days),
                 price_paid=Decimal(random.choice(["500.00", "1000.00", "2500.00"])),
+                payment_method=random.choice([c[0] for c in ParkingPass.PAYMENT_METHOD_CHOICES]),
+                reminder_enabled=random.random() > 0.5,
                 is_active=random.random() > 0.1,
                 notes=fake.sentence() if random.random() > 0.7 else "",
                 is_sample=True,
             )
+            covered_ids.add(member.id)
+
+            # ~1 in 5 passes cover a second vehicle (e.g. a spouse's car, or a
+            # staff member with two registered plates) — pick from staff not
+            # already the primary holder of another pass to keep things simple.
+            if random.random() < 0.2:
+                candidates = [s for s in staff if s.id != member.id and s.id not in covered_ids]
+                if candidates:
+                    extra = random.choice(candidates)
+                    parking_pass.extra_vehicles.add(extra)
+                    covered_ids.add(extra.id)
+
             passes.append(parking_pass)
         return passes
 

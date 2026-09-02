@@ -9,6 +9,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.core.exceptions import ValidationError
 from django.db import transaction, IntegrityError
+from django.db.models import Q
 from django.shortcuts import get_object_or_404, render
 from django.views import View
 from django.http import HttpResponse
@@ -115,7 +116,9 @@ class CouponViewSet(viewsets.ModelViewSet):
 
 
 class ParkingPassViewSet(viewsets.ModelViewSet):
-    queryset = ParkingPass.objects.all()
+    queryset = ParkingPass.objects.select_related(
+        'staff', 'staff__company', 'staff__vehicle_type'
+    ).prefetch_related('extra_vehicles__company', 'extra_vehicles__vehicle_type').all()
     serializer_class = ParkingPassSerializer
 
 
@@ -531,7 +534,9 @@ class ParkingSessionViewSet(viewsets.ModelViewSet):
         if license_plate:
             active_pass = self._check_active_subscription(license_plate)
             if active_pass:
-                staff = active_pass.staff
+                # The pass may cover several vehicles — attribute the session to
+                # whichever vehicle was actually scanned, not the pass's primary holder.
+                staff = Staff.objects.filter(license_plate=license_plate).first()
                 request.data.update({
                     'status': 'COVERED_BY_PASS',
                     'applied_pass': active_pass.id,
@@ -570,7 +575,9 @@ class ParkingSessionViewSet(viewsets.ModelViewSet):
         if session.license_plate:
             active_pass = self._check_active_subscription(session.license_plate)
             if active_pass:
-                staff = active_pass.staff
+                # The pass may cover several vehicles — attribute the session to
+                # whichever vehicle was actually scanned, not the pass's primary holder.
+                staff = Staff.objects.filter(license_plate=session.license_plate).first()
                 session.applied_pass = active_pass
                 session.registered_staff_member = staff
                 session.status = 'COVERED_BY_PASS'
@@ -604,11 +611,11 @@ class ParkingSessionViewSet(viewsets.ModelViewSet):
         if not staff:
             return None
         return ParkingPass.objects.filter(
-            staff=staff,
+            Q(staff=staff) | Q(extra_vehicles=staff),
             valid_from__lte=timezone.now(),
             valid_until__gte=timezone.now(),
             is_active=True
-        ).first()
+        ).distinct().first()
 
     @action(detail=True, methods=['post'], url_path='apply-coupon')
     def apply_coupon(self, request, ticket_number=None):

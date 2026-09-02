@@ -406,12 +406,32 @@ class CouponBatch(models.Model):
         ordering = ['-purchase_date']
 
 class ParkingPass(models.Model):
+    PAYMENT_METHOD_CHOICES = [
+        ('CASH', 'Cash'),
+        ('BANK_TRANSFER', 'Bank transfer'),
+        ('CHEQUE', 'Cheque'),
+        ('SALARY_DEDUCTION', 'Salary deduction'),
+    ]
+
     staff = models.ForeignKey(
-        Staff, on_delete=models.CASCADE, related_name="parking_passes")
+        Staff, on_delete=models.CASCADE, related_name="parking_passes",
+        help_text="Primary pass holder. Additional vehicles covered by the same pass go in extra_vehicles."
+    )
+    extra_vehicles = models.ManyToManyField(
+        Staff, related_name="parking_passes_covered", blank=True,
+        help_text="Other vehicles covered by this same pass, besides the primary staff member above. "
+                   "One price covers every vehicle listed — only one of them may be inside the lot at a time."
+    )
     valid_from = models.DateTimeField()
     valid_until = models.DateTimeField()
     price_paid = models.DecimalField(
         max_digits=8, decimal_places=2, default=Decimal('0.00'))
+    payment_method = models.CharField(
+        max_length=20, choices=PAYMENT_METHOD_CHOICES, default='CASH')
+    reminder_enabled = models.BooleanField(
+        default=False,
+        help_text="Send a renewal reminder 7 days before this pass ends."
+    )
     is_active = models.BooleanField(default=True)
     notes = models.TextField(blank=True)
     is_sample = models.BooleanField(
@@ -421,6 +441,15 @@ class ParkingPass(models.Model):
 
     def is_valid_at(
             self, check_datetime): return self.is_active and self.valid_from <= check_datetime <= self.valid_until
+
+    def covers_staff(self, staff):
+        return staff is not None and (staff_id := staff.pk) is not None and (
+            self.staff_id == staff_id or self.extra_vehicles.filter(pk=staff_id).exists()
+        )
+
+    def all_vehicles(self):
+        """Primary staff member plus every extra vehicle covered by this pass."""
+        return [self.staff, *self.extra_vehicles.all()]
 
     def generate_qr_code(self):
         # Create QR code data - includes staff ID and license plate

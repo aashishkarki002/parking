@@ -118,15 +118,28 @@ class CouponSerializer(serializers.ModelSerializer):
 
 
 class ParkingPassSerializer(serializers.ModelSerializer):
-    # ... (NO CHANGES to this serializer) ...
-    staff = serializers.StringRelatedField()
+    staff = StaffSerializer(read_only=True)
     staff_id = serializers.PrimaryKeyRelatedField(
         queryset=Staff.objects.all(), source='staff', write_only=True
+    )
+    extra_vehicles = StaffSerializer(many=True, read_only=True)
+    extra_vehicle_ids = serializers.PrimaryKeyRelatedField(
+        queryset=Staff.objects.all(), source='extra_vehicles', write_only=True, many=True, required=False
     )
 
     class Meta:
         model = ParkingPass
-        fields = ['id', 'staff', 'staff_id', 'valid_from', 'valid_until', 'price_paid', 'is_active', 'notes']
+        fields = [
+            'id', 'staff', 'staff_id', 'extra_vehicles', 'extra_vehicle_ids',
+            'valid_from', 'valid_until', 'price_paid', 'payment_method', 'reminder_enabled',
+            'is_active', 'notes',
+        ]
+
+    def validate_extra_vehicle_ids(self, vehicles):
+        staff = self.initial_data.get('staff_id')
+        if staff is not None and any(str(v.pk) == str(staff) for v in vehicles):
+            raise serializers.ValidationError('The primary staff member cannot also be listed as an extra vehicle.')
+        return vehicles
 
 
 class TicketStampSerializer(serializers.ModelSerializer):

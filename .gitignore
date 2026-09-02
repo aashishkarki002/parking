@@ -1,0 +1,2 @@
+# Local Django settings (contains DB creds / env fallbacks) - never sync with git
+backend/parkingcore/settings.py
