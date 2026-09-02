@@ -179,8 +179,14 @@ class Command(BaseCommand):
     # -- reference data ------------------------------------------------------
 
     def _create_vendors(self):
+        # Exactly one sample vendor simulates a tenant EasyManage has blocked
+        # (gate_access_allowed=False), so the "blocked tenant" gate-scan path
+        # has sample data too. See sync_vendor_from_payload for the real
+        # cascade this mirrors (blocked vendor -> its staff cards deactivated).
+        blocked_name = VENDOR_NAMES[-1]
         vendors = []
-        for name in VENDOR_NAMES:
+        for i, name in enumerate(VENDOR_NAMES):
+            is_blocked = name == blocked_name
             vendor, _ = Vendor.objects.update_or_create(
                 name=name,
                 defaults={
@@ -188,6 +194,16 @@ class Command(BaseCommand):
                     "contact_person": fake.name(),
                     "contact_email": fake.company_email(),
                     "stamp_free_minutes": random.choice(STAMP_FREE_MINUTES_CHOICES),
+                    # Simulated EasyManage sync cache: never derived locally
+                    # in production (see Vendor model docstring), but sample
+                    # vendors need plausible values so the staff-quota and
+                    # sync-status UI have something realistic to show.
+                    "external_tenant_id": f"EM-SAMPLE-{i + 1:04d}",
+                    "car_quota": random.randint(5, 20),
+                    "bike_quota": random.randint(3, 15),
+                    "gate_access_allowed": not is_blocked,
+                    "last_synced_at": timezone.now() - timedelta(hours=random.randint(1, 48)),
+                    "sync_source": random.choice(["webhook", "pull"]),
                     "is_sample": True,
                 },
             )
@@ -220,14 +236,18 @@ class Command(BaseCommand):
         for i in range(staff_count):
             plate = f"STAFF-{i + 1:03d}"
             used_plates.add(plate)
+            company = random.choice(vendors)
+            # Mirrors sync_vendor_from_payload's cascade: a blocked vendor's
+            # staff cards are never active, sample data or not.
+            is_card_active = company.gate_access_allowed and random.random() > 0.1
             member, _ = Staff.objects.update_or_create(
                 license_plate=plate,
                 defaults={
                     "name": fake.name(),
                     "email": fake.email(),
-                    "company": random.choice(vendors),
+                    "company": company,
                     "vehicle_type": random.choice(vehicle_types),
-                    "is_card_active": random.random() > 0.1,
+                    "is_card_active": is_card_active,
                     "is_sample": True,
                 },
             )
@@ -342,7 +362,15 @@ class Command(BaseCommand):
 
     def _create_parking_sessions(self, count, vehicle_types, staff, coupons):
         now = timezone.now()
-        free_minutes_coupons = [c for c in coupons if c.validation_type == "FREE_MINUTES" and c.is_active]
+        free_minutes_coupons = [
+            c for c in coupons
+            if c.validation_type == "FREE_MINUTES" and c.is_valid()[0]
+        ]
+        # apply_coupon()'s use isn't consumed until mark_as_paid() increments
+        # times_used, and batch-generated coupons have max_uses=1 — track
+        # local remaining uses so a single-use coupon isn't picked again
+        # after it's already been paid off earlier in this same loop.
+        coupon_uses_remaining = {c.pk: c.max_uses - c.times_used for c in free_minutes_coupons}
         sessions = []
 
         for _ in range(count):
@@ -399,8 +427,12 @@ class Command(BaseCommand):
                 waiver = next((c for c in coupons if c.validation_type == "COMPLETE_WAIVER" and c.is_active), None)
                 if waiver:
                     session.apply_coupon(waiver.code)
-            elif free_minutes_coupons and random.random() > 0.6:
-                session.apply_coupon(random.choice(free_minutes_coupons).code)
+            elif random.random() > 0.6:
+                usable = [c for c in free_minutes_coupons if coupon_uses_remaining[c.pk] > 0]
+                if usable:
+                    chosen = random.choice(usable)
+                    session.apply_coupon(chosen.code)
+                    coupon_uses_remaining[chosen.pk] -= 1
 
             session.update_and_calculate_charges()
 
