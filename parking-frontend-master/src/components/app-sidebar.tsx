@@ -6,7 +6,6 @@ import {
   BuildingOffice2Icon,
   UsersIcon,
   DocumentTextIcon,
-  WrenchScrewdriverIcon,
   ChevronUpDownIcon,
   ChevronDownIcon,
   SunIcon,
@@ -341,7 +340,6 @@ export function AppSidebar() {
   ];
 
   const statementsItem = { title: 'Statements', url: '/statements', icon: DocumentTextIcon };
-  const maintenanceItem = { title: 'Maintenance', url: '/maintenance', icon: WrenchScrewdriverIcon };
   const tenantsItem = { title: 'Tenants', url: '/tenants', icon: UsersIcon };
 
   return (
@@ -435,19 +433,6 @@ export function AppSidebar() {
                   />
                   {renderItem(statementsItem)}
                 </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>
-          )}
-
-          {canSeeBackOffice && (
-            <SidebarGroup>
-              {!isCollapsed && (
-                <SidebarGroupLabel className=" h-auto truncate px-2.5 py-0 text-[11px] font-semibold tracking-wider text-sidebar-primary uppercase   ">
-                  Settings
-                </SidebarGroupLabel>
-              )}
-              <SidebarGroupContent>
-                <SidebarMenu className="gap-2">{renderItem(maintenanceItem)}</SidebarMenu>
               </SidebarGroupContent>
             </SidebarGroup>
           )}

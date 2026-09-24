@@ -12,6 +12,7 @@ import { EmptyState } from '@/components/EmptyState';
 import { VehicleFormSheet } from '@/components/VehicleFormSheet';
 import { TenantDirectory } from '@/components/tenants/TenantDirectory';
 import { TenantMembers } from '@/components/tenants/TenantMembers';
+import { MemberCardDialog } from '@/components/tenants/MemberCardDialog';
 import {
   categoryFor,
   EXPIRING_WINDOW_DAYS,
@@ -80,8 +81,9 @@ const TenantsPage = () => {
   const [now] = useState(() => Date.now());
 
   const [sheetOpen, setSheetOpen] = useState(false);
-  const [formMode, setFormMode] = useState<'create' | 'edit'>('create');
-  const [selectedStaff, setSelectedStaff] = useState<StaffMember | null>(null);
+  // Tracked by id so the card re-reads the member from fresh rows after a
+  // refetch (e.g. when its card is deactivated from inside the dialog).
+  const [viewMemberId, setViewMemberId] = useState<number | null>(null);
 
   const isLoading = vendorsLoading || staffLoading;
   const isError = vendorsError || staffError;
@@ -166,6 +168,9 @@ const TenantsPage = () => {
 
   const selectedRow = selectedKey ? rows.find((r) => r.key === selectedKey) ?? null : null;
 
+  const viewedMember =
+    viewMemberId !== null ? selectedRow?.members.find((m) => m.id === viewMemberId) ?? null : null;
+
   const selectTenant = (key: string) => {
     setSearchParams({ tenant: key });
   };
@@ -175,16 +180,13 @@ const TenantsPage = () => {
   };
 
   const openRegisterVehicle = () => {
-    setFormMode('create');
-    setSelectedStaff(null);
     setSheetOpen(true);
   };
 
-  const openMember = (member: TenantMember) => {
-    setFormMode('edit');
-    setSelectedStaff(member);
-    setSheetOpen(true);
+  const viewMember = (member: TenantMember) => {
+    setViewMemberId(member.id);
   };
+
 
   return (
     <PageShell
@@ -228,14 +230,24 @@ const TenantsPage = () => {
           description="That tenant no longer exists. Go back to the directory to pick another one."
         />
       ) : selectedRow ? (
-        <TenantMembers row={selectedRow} onBack={clearTenant} onOpenMember={openMember} />
+        <TenantMembers row={selectedRow} onBack={clearTenant} onOpenMember={viewMember} />
       ) : (
         <TenantDirectory rows={rows} onSelect={selectTenant} />
       )}
 
+      {selectedRow && (
+        <MemberCardDialog
+          member={viewedMember}
+          row={selectedRow}
+          open={viewedMember !== null}
+          onOpenChange={(open) => {
+            if (!open) setViewMemberId(null);
+          }}
+          onChanged={refetchStaff}
+        />
+      )}
+
       <VehicleFormSheet
-        mode={formMode}
-        staff={selectedStaff}
         defaultCompanyId={selectedRow?.vendor?.id ?? null}
         open={sheetOpen}
         onOpenChange={setSheetOpen}

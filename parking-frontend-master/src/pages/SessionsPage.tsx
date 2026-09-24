@@ -197,7 +197,7 @@ const SessionsPage = () => {
     return fromUrl === 'CASH' || fromUrl === 'ONLINE_PAYMENT' || fromUrl === 'UNPAID' ? fromUrl : 'ALL';
   });
   const [entryFilter, setEntryFilter] = useState<'ALL' | 'TODAY'>('ALL');
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(() => searchParams.get('search') ?? '');
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [addOpen, setAddOpen] = useState(false);

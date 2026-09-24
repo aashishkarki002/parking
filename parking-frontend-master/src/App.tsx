@@ -7,13 +7,13 @@ import TenantsPage from './pages/TenantsPage';
 import SubscriptionsPage from './pages/SubscriptionsPage';
 import BillingPage from './pages/BillingPage';
 import StatementsPage from './pages/StatementsPage';
-import MaintenancePage from './pages/MaintenancePage';
 import ProfilePage from './pages/ProfilePage';
 import PricingPlansPage from './pages/PricingPlansPage';
 import VehicleTypesPage from './pages/VehicleTypesPage';
 import ManageOperatorsPage from './pages/ManageOperatorsPage';
 import ReportsPage from './pages/ReportsPage';
 import RfidTodayPage from './pages/RfidTodayPage';
+import MaintenancePage from './pages/MaintenancePage';
 import { RequireRole } from './components/RequireRole';
 import { ROLE_ADMIN, ROLE_POS, ROLE_SUPERADMIN } from './lib/public/roles';
 
