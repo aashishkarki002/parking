@@ -28,7 +28,7 @@ import {
   Typography,
 } from '@mui/material';
 import { GridCheckCircleIcon } from '@mui/x-data-grid';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'react-toastify';
 import {
   useApplyCouponMutation,
@@ -39,12 +39,16 @@ import {
   useLazySearchStaffQuery,
   usePaymentMethodMutation,
   usePrintBillMutation,
+  useRfidForceEntryMutation,
+  useRfidTapMutation,
   useScanCodeMutation,
   useTenantCardConfirmMutation,
   useTenantCardScanMutation,
 } from '@/app/(public)/(pages)/home/_redux/api';
+import useRfidReader from '@/hooks/common/useRfidReader';
 import GenerateBill from './GenerateBill';
 import GenerateTicket from './PrintTicket';
+import RfidTapBanner, { type RfidTapResult } from './RfidTapBanner';
 import styles from './styles.module.css';
 
 // Tenant cards encode a UUID card_code (physical), "<uuid>:<ts>:<sig>"
@@ -88,6 +92,85 @@ const getFreeExitLabel = (
   return 'Waived';
 };
 
+// A free exit for a tenant's own registered vehicle — a Staff card holder,
+// including a monthly-pass (COVERED_BY_PASS) subscriber — isn't a walk-up
+// visitor transaction: nothing is handed to anyone, so printing a receipt
+// for every tenant in/out is just wasted stock.
+//
+// A *stamped* ticket is the opposite case: the car belongs to a visitor
+// whose parking a tenant validated, and the printed slip is the visitor's
+// proof of who authorized the free exit — so stamped exits must still
+// print. Tenant vehicles are never stampable (add_stamp rejects them
+// server-side), so the two cases can't overlap.
+//
+// The charge is part of the test on purpose: registered_staff_member is
+// matched by plate whether or not the tenant still holds a valid pass, so a
+// tenant whose pass lapsed is charged like any visitor and must still get a
+// receipt for what they paid.
+const isNoReceiptTenantExit = (
+  charge: number,
+  status?: string,
+  registeredStaffMember?: string | null
+) => charge <= 0 && (status === 'COVERED_BY_PASS' || !!registeredStaffMember);
+
+interface RfidTapResponse {
+  status: string;
+  uid: string;
+  tenant_name?: string;
+  company?: string | null;
+  license_plate?: string;
+  session_id?: string;
+  entry_time?: string;
+  exit_time?: string;
+  duration_minutes?: number | null;
+  calculated_charge?: string | null;
+  message?: string;
+}
+
+const RFID_DENIED_TITLES: Record<string, string> = {
+  unknown_card: 'Unknown card',
+  subscription_expired: 'Subscription expired',
+  access_revoked: 'Gate access revoked',
+  no_vehicle_type: 'No vehicle type on file',
+  stale_correction: 'Cannot correct that exit',
+  already_paid: 'Cannot correct that exit',
+};
+
+const toRfidResult = (uid: string, res: RfidTapResponse): RfidTapResult => {
+  const tenant = {
+    uid,
+    tenantName: res.tenant_name,
+    company: res.company ?? null,
+    licensePlate: res.license_plate,
+  };
+  if (res.status === 'entry') {
+    return { ...tenant, kind: 'entry', title: 'Entry', time: res.entry_time, sessionId: res.session_id };
+  }
+  if (res.status === 'exit') {
+    return {
+      ...tenant,
+      kind: 'exit',
+      title: 'Exit',
+      time: res.exit_time,
+      durationMinutes: res.duration_minutes,
+      charge: Number(res.calculated_charge ?? 0),
+      sessionId: res.session_id,
+    };
+  }
+  return {
+    ...tenant,
+    kind: 'error',
+    title: RFID_DENIED_TITLES[res.status] ?? 'Card not accepted',
+    message: res.message ?? RFID_DENIED_TITLES[res.status] ?? 'Card not accepted',
+  };
+};
+
+const rfidErrorResult = (uid: string, err: unknown): RfidTapResult => {
+  const data = (err as { data?: RfidTapResponse | string })?.data;
+  if (data && typeof data === 'object' && data.status) return toRfidResult(uid, data);
+  return { uid, kind: 'error', title: 'Card read failed', message: 'Could not reach the server. Tap again.' };
+};
+
 const Options = () => {
   const [bikeData, setBikeData] = useState<{
     entryTime: string;
@@ -112,6 +195,7 @@ const Options = () => {
     isActive: boolean;
     paymentMethod?: string;
     status?: string;
+    registeredStaffMember?: string | null;
     stamps?: { vendor: string }[];
     tenantBill?: { vendor: string; overage_minutes: number; amount: string } | null;
   } | null>(null);
@@ -214,6 +298,43 @@ const Options = () => {
   const [confirmTenantCard] = useTenantCardConfirmMutation();
   const [triggerGetSessionByTicket] = useLazyGetSessionByTicketQuery();
   const [postStamp] = useApplyStampMutation();
+  const [postRfidTap] = useRfidTapMutation();
+  const [postRfidForceEntry, { isLoading: rfidCorrecting }] = useRfidForceEntryMutation();
+
+  // RFID reader at the booth: always on, types the card UID + Enter. One
+  // tap toggles the tenant in/out — no button to press first. See
+  // useRfidReader for how it's told apart from barcode scans.
+  const [rfidResult, setRfidResult] = useState<RfidTapResult | null>(null);
+  const dismissRfidResult = useCallback(() => setRfidResult(null), []);
+
+  const handleRfidTap = async (uid: string) => {
+    try {
+      const res: RfidTapResponse = await postRfidTap({ uid }).unwrap();
+      if (res.status === 'ignored_duplicate') {
+        toast.info('Same card tapped twice — ignored.', { autoClose: 1500, hideProgressBar: true });
+        return;
+      }
+      setRfidResult(toRfidResult(uid, res));
+    } catch (err) {
+      setRfidResult(rfidErrorResult(uid, err));
+    }
+  };
+
+  useRfidReader(handleRfidTap);
+
+  const handleRfidMarkAsEntry = async () => {
+    if (!rfidResult || rfidResult.kind !== 'exit') return;
+    try {
+      const res: RfidTapResponse = await postRfidForceEntry({
+        uid: rfidResult.uid,
+        session_id: rfidResult.sessionId,
+      }).unwrap();
+      setRfidResult(toRfidResult(rfidResult.uid, res));
+      toast.success('Corrected — recorded as an entry. The earlier session is excluded from reports.');
+    } catch (err) {
+      setRfidResult(rfidErrorResult(rfidResult.uid, err));
+    }
+  };
 
   // Hardware barcode scanners type the whole code in one fast burst, but the
   // scanner's terminating Enter/CR suffix does not always reach the browser
@@ -411,16 +532,28 @@ const Options = () => {
           isActive: res.is_active,
           paymentMethod: res.payment_method,
           status: res.status,
+          registeredStaffMember: res.registered_staff_member || null,
           stamps: res.stamps || [],
           tenantBill: res.tenant_bill || null,
         };
         setBillData(respData);
         setBikeData(null);
         setCarData(null);
-        // Under the vehicle type's free-duration grace period (calculated_charge
-        // 0.00, status WAIVED server-side) — no payment method to collect, so
-        // skip straight to printing instead of waiting on a Cash/Online click.
-        if (respData.charge <= 0) {
+        if (
+          isNoReceiptTenantExit(
+            respData.charge,
+            respData.status,
+            respData.registeredStaffMember
+          )
+        ) {
+          // A tenant's own vehicle / monthly subscriber leaving free — mark
+          // the exit done without printing anything.
+          setBillGenerated(true);
+        } else if (respData.charge <= 0) {
+          // Free for the visitor — either a tenant stamp covered it, or it's
+          // under the vehicle type's free-duration grace period. Either way
+          // there's no payment method to collect, so skip straight to
+          // printing instead of waiting on a Cash/Online click.
           setProceedToGenerateBill(true);
         }
       } else {
@@ -469,6 +602,15 @@ const Options = () => {
     try {
       const res = await triggerGetSessionByTicket(scannedTicket).unwrap();
       if (res) {
+        // Stamps validate visitors. A ticket belonging to a tenant's own
+        // registered vehicle is never stampable (the backend rejects it), so
+        // stop here instead of offering a vendor to bill.
+        if (res.registered_staff_member) {
+          toast.error(
+            `This ticket is a registered tenant vehicle (${res.registered_staff_member}) — tenants are only billed for visitors they stamp.`
+          );
+          return;
+        }
         setStampSession({
           ticketNo: res.ticket_number,
           vehicleNo: res.license_plate || '',
@@ -531,9 +673,13 @@ const Options = () => {
             isActive: exitRes.is_active,
             paymentMethod: exitRes.payment_method,
             status: exitRes.status,
+            registeredStaffMember: exitRes.registered_staff_member || null,
             stamps: exitRes.stamps || res.stamps || [],
             tenantBill: exitRes.tenant_bill || res.tenant_bill || null,
           });
+          // A stamp authorizes a free exit for a *visitor*, and the slip is
+          // their proof of which tenant validated it — so print it, exactly
+          // as the plain grace-period exit does.
           if (Number(exitRes.calculated_charge ?? 0) <= 0) {
             setProceedToGenerateBill(true);
           }
@@ -779,6 +925,14 @@ const Options = () => {
 
   return (
     <>
+      {rfidResult && (
+        <RfidTapBanner
+          result={rfidResult}
+          onDismiss={dismissRfidResult}
+          onMarkAsEntry={handleRfidMarkAsEntry}
+          correcting={rfidCorrecting}
+        />
+      )}
       <input
         ref={parkingPassInputRef}
         style={{
@@ -1459,8 +1613,10 @@ const Options = () => {
                           ? `Overstayed the free window — billed to ${billData.tenantBill.vendor} instead. No payment needed. Printing…`
                           : 'Covered by a tenant stamp — no payment needed. Printing…'
                         : billData.status === 'COVERED_BY_PASS'
-                          ? 'Covered by a tenant parking pass — no payment needed. Printing…'
-                          : 'Within the free-duration grace period — no payment needed. Printing…'}
+                          ? 'Covered by a tenant parking pass — no payment needed. No receipt printed.'
+                          : billData.registeredStaffMember
+                            ? 'Registered tenant vehicle — no payment needed. No receipt printed.'
+                            : 'Within the free-duration grace period — no payment needed. Printing…'}
                     </Typography>
                   </Box>
                 )}
@@ -1679,6 +1835,7 @@ const Options = () => {
       {billData &&
         proceedToGenerateBill &&
         !billGenerated &&
+        !isNoReceiptTenantExit(billData.charge, billData.status, billData.registeredStaffMember) &&
         (billData.paymentMethod || billData.charge <= 0) && (
         <GenerateBill
           ticketNo={billData.ticketNo}

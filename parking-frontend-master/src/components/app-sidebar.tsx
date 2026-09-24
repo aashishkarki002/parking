@@ -15,6 +15,7 @@ import {
   TagIcon,
   TruckIcon,
   UserGroupIcon,
+  ChartBarIcon,
   ArrowRightStartOnRectangleIcon,
 } from '@heroicons/react/24/outline';
 import Cookies from 'js-cookie';
@@ -49,6 +50,7 @@ import { PUBLIC_REFRESH_TOKEN } from '@/constants/public/tokens';
 import { HOME } from '@/constants/public/routes';
 import { useTheme } from '@/hooks/theme-provider';
 import { Clock10Icon } from 'lucide-react';
+import { isAdminOrAbove, isSuperAdmin } from '@/lib/public/roles';
 
 // Mirrors SubscriptionsPage's DUE_SOON_DAYS threshold — kept in sync manually
 // since there's no shared stats endpoint to source this count from yet.
@@ -65,6 +67,9 @@ interface SidebarPass {
 }
 
 const topItem = { title: 'Dashboard', url: '/dashboard', icon: Squares2X2Icon };
+// Reports sits beside Dashboard rather than inside Billing: it spans sessions,
+// tenants, validation and revenue, so it is not owned by any one group.
+const reportsItem = { title: 'Reports', url: '/reports', icon: ChartBarIcon };
 
 type NavChild = { title: string; url: string; isActive: boolean; pill?: number };
 
@@ -206,7 +211,10 @@ export function AppSidebar() {
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const dispatch = useAppDispatch();
-  const { currentUser, email } = useAppSelector(loginSelector);
+  const loginState = useAppSelector(loginSelector);
+  const { currentUser, email } = loginState;
+  const canSeeBackOffice = isAdminOrAbove(loginState);
+  const canManageOperators = isSuperAdmin(loginState);
   const [logout] = usePublicLogoutMutation();
 
   // `state` is 'expanded' | 'collapsed' for the desktop icon-rail behavior.
@@ -219,11 +227,14 @@ export function AppSidebar() {
   // Lazily seeded from the current route so a group opens on first render
   // when it's already showing (e.g. landing on /sessions?tab=ACTIVE from a
   // link), without fighting the user's own expand/collapse afterwards.
-  const [sessionsOpen, setSessionsOpen] = useState(() => location.pathname === '/sessions');
+  const [sessionsOpen, setSessionsOpen] = useState(() => ['/sessions', '/tenant-gate-today'].includes(location.pathname));
   const [subscriptionsOpen, setSubscriptionsOpen] = useState(() => location.pathname === '/subscription');
 
   const { data: sessionsData } = useGetSessionsQuery(undefined);
-  const { data: passesData } = useGetParkingPassesQuery(undefined);
+  // ParkingPassViewSet is admin+ only on the backend — skip the call for pos
+  // accounts so they don't take a 403 (and a "Permission denied" toast) just
+  // for having the sidebar mounted.
+  const { data: passesData } = useGetParkingPassesQuery(undefined, { skip: !canSeeBackOffice });
   const sessions: SidebarSession[] = sessionsData ?? [];
   const passes: SidebarPass[] = passesData ?? [];
 
@@ -260,9 +271,13 @@ export function AppSidebar() {
 
   const accountMenuItems = [
     { title: 'My profile', url: '/profile', icon: UserCircleIcon },
-    { title: 'Pricing plans', url: '/pricing-plans', icon: TagIcon },
-    { title: 'Vehicle types', url: '/vehicle-types', icon: TruckIcon },
-    { title: 'Manage operators', url: '/operators', icon: UserGroupIcon },
+    ...(canSeeBackOffice
+      ? [
+          { title: 'Pricing plans', url: '/pricing-plans', icon: TagIcon },
+          { title: 'Vehicle types', url: '/vehicle-types', icon: TruckIcon },
+        ]
+      : []),
+    ...(canManageOperators ? [{ title: 'Manage operators', url: '/operators', icon: UserGroupIcon }] : []),
   ];
 
   const handleLogout = () => {
@@ -315,6 +330,7 @@ export function AppSidebar() {
       isActive: isSessions && searchParams.get('payment') === 'UNPAID',
       pill: unpaidExitCount,
     },
+    { title: 'Tenant gate today', url: '/tenant-gate-today', isActive: location.pathname === '/tenant-gate-today' },
   ];
 
   const isSubscriptions = location.pathname === '/subscription';
@@ -364,11 +380,16 @@ export function AppSidebar() {
 
       <SidebarContent className=" px-2   ">
         <div className="flex min-h-0 flex-1 flex-col  ">
-          <SidebarGroup className="p-0 m-1">
-            <SidebarGroupContent className=''>
-              <SidebarMenu className="gap-1">{renderItem(topItem)}</SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
+          {canSeeBackOffice && (
+            <SidebarGroup className="p-0 m-1">
+              <SidebarGroupContent className=''>
+                <SidebarMenu className="gap-1">
+                  {renderItem(topItem)}
+                  {renderItem(reportsItem)}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          )}
 
           <SidebarGroup>
             {!isCollapsed && (
@@ -388,44 +409,48 @@ export function AppSidebar() {
                   onNavigate={goTo}
                   children={sessionChildren}
                 />
-                {renderItem(tenantsItem)}
+                {canSeeBackOffice && renderItem(tenantsItem)}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
 
-          <SidebarGroup>
-            {!isCollapsed && (
-              <SidebarGroupLabel className=" h-auto truncate px-2.5 py-0 text-[11px] font-semibold tracking-wider text-sidebar-primary uppercase   ">
-                Billing
-              </SidebarGroupLabel>
-            )}
-            <SidebarGroupContent>
-              <SidebarMenu className="gap-2">
-                <NavExpandable
-                  title="Subscriptions"
-                  icon={Clock10Icon}
-                  isActive={isSubscriptions}
-                  pillCount={dueSoonPassCount}
-                  open={subscriptionsOpen}
-                  onToggle={() => setSubscriptionsOpen((o) => !o)}
-                  onNavigate={goTo}
-                  children={subscriptionChildren}
-                />
-                {renderItem(statementsItem)}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
+          {canSeeBackOffice && (
+            <SidebarGroup>
+              {!isCollapsed && (
+                <SidebarGroupLabel className=" h-auto truncate px-2.5 py-0 text-[11px] font-semibold tracking-wider text-sidebar-primary uppercase   ">
+                  Billing
+                </SidebarGroupLabel>
+              )}
+              <SidebarGroupContent>
+                <SidebarMenu className="gap-2">
+                  <NavExpandable
+                    title="Subscriptions"
+                    icon={Clock10Icon}
+                    isActive={isSubscriptions}
+                    pillCount={dueSoonPassCount}
+                    open={subscriptionsOpen}
+                    onToggle={() => setSubscriptionsOpen((o) => !o)}
+                    onNavigate={goTo}
+                    children={subscriptionChildren}
+                  />
+                  {renderItem(statementsItem)}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          )}
 
-          <SidebarGroup>
-            {!isCollapsed && (
-              <SidebarGroupLabel className=" h-auto truncate px-2.5 py-0 text-[11px] font-semibold tracking-wider text-sidebar-primary uppercase   ">
-                Settings
-              </SidebarGroupLabel>
-            )}
-            <SidebarGroupContent>
-              <SidebarMenu className="gap-2">{renderItem(maintenanceItem)}</SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
+          {canSeeBackOffice && (
+            <SidebarGroup>
+              {!isCollapsed && (
+                <SidebarGroupLabel className=" h-auto truncate px-2.5 py-0 text-[11px] font-semibold tracking-wider text-sidebar-primary uppercase   ">
+                  Settings
+                </SidebarGroupLabel>
+              )}
+              <SidebarGroupContent>
+                <SidebarMenu className="gap-2">{renderItem(maintenanceItem)}</SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          )}
         </div>
       </SidebarContent>
 

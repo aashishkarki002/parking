@@ -1,104 +1,178 @@
 import { useMemo, useState } from 'react';
-import { Bike, Car, ChevronLeft, ChevronRight, Eye, Plus, Search } from 'lucide-react';
-import { useGetStaffQuery } from '@/app/(public)/(pages)/home/_redux/api';
+import { useSearchParams } from 'react-router-dom';
+import { Plus } from 'lucide-react';
+import {
+  useGetParkingPassesQuery,
+  useGetStaffQuery,
+  useGetVehicleTypesQuery,
+  useGetVendorsQuery,
+} from '@/app/(public)/(pages)/home/_redux/api';
 import { PageShell } from '@/components/PageShell';
 import { EmptyState } from '@/components/EmptyState';
 import { VehicleFormSheet } from '@/components/VehicleFormSheet';
+import { TenantDirectory } from '@/components/tenants/TenantDirectory';
+import { TenantMembers } from '@/components/tenants/TenantMembers';
+import {
+  categoryFor,
+  EXPIRING_WINDOW_DAYS,
+  UNASSIGNED_KEY,
+  type StaffMember,
+  type TenantMember,
+  type TenantRow,
+  type Vendor,
+  type VehicleCategory,
+} from '@/components/tenants/types';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
-import { cn } from '@/lib/utils';
-import { formatDate } from '@/functions/dateFn';
 import { UsersIcon } from '@heroicons/react/24/outline';
 
-interface StaffMember {
+interface VehicleTypeOption {
   id: number;
   name: string;
-  company: string | null;
-  license_plate: string;
-  vehicle_type: string | null;
-  is_card_active: boolean;
-  active_pass_until: string | null;
-  card_code?: string;
+  category: VehicleCategory;
 }
 
-const PAGE_SIZE = 8;
-
-const getInitials = (name: string) =>
-  name
-    .replace(/^(Mr\.|Ms\.|Mrs\.|Dr\.)\s+/i, '')
-    .split(' ')
-    .filter(Boolean)
-    .map((part) => part[0])
-    .slice(0, 2)
-    .join('')
-    .toUpperCase();
-
-const isBike = (vehicleType: string | null) => /bike|motor|scooter/i.test(vehicleType || '');
-
-// Baseline permanent card ("Tenant") vs a time-boxed pass on top of it
-// ("Monthly") — the only two permit shapes the Staff/ParkingPass models
-// actually support today.
-function PermitBadge({ hasActivePass }: { hasActivePass: boolean }) {
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-semibold',
-        hasActivePass
-          ? 'border-indigo-200 bg-indigo-50 text-indigo-700 dark:border-indigo-900 dark:bg-indigo-950/40 dark:text-indigo-300'
-          : 'border-primary/20 bg-secondary text-secondary-foreground'
-      )}
-    >
-      {hasActivePass ? 'Monthly' : 'Tenant'}
-    </span>
-  );
+interface PassVehicle {
+  id: number;
 }
 
-function StatusPill({ active }: { active: boolean }) {
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold',
-        active
-          ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-400'
-          : 'border-border bg-muted text-muted-foreground'
-      )}
-    >
-      <span className={cn('h-1.5 w-1.5 rounded-full', active ? 'bg-emerald-600 dark:bg-emerald-400' : 'bg-muted-foreground')} />
-      {active ? 'Active' : 'Inactive'}
-    </span>
-  );
+interface ParkingPassRow {
+  staff: PassVehicle | null;
+  extra_vehicles: PassVehicle[];
+  valid_until: string;
+  is_active: boolean;
 }
 
-function KpiTile({
-  label,
-  value,
-  caption,
-}: {
-  label: React.ReactNode;
-  value: React.ReactNode;
-  caption: React.ReactNode;
-}) {
-  return (
-    <div className="flex flex-col gap-1.5 bg-card p-4">
-      <span className="text-[10.5px] font-semibold uppercase tracking-[0.09em] text-muted-foreground">{label}</span>
-      <span className="text-[26px] leading-none font-bold tracking-tight tabular-nums text-foreground">{value}</span>
-      <span className="text-xs text-muted-foreground">{caption}</span>
-    </div>
-  );
-}
+// Stable identity for the "not loaded yet" case, so the fallback below does
+// not invalidate the memos on every render.
+const NONE: never[] = [];
 
+// Tenants are the top level: a tenant (Vendor) holds the car/bike quota and
+// the gate-access flag, and its members (Staff) are the individual cardholders
+// underneath it. This page renders that hierarchy — the directory first, one
+// tenant's members after drilling in (?tenant=<id>, so the view is linkable
+// and the browser back button walks back up).
 const TenantsPage = () => {
-  const { data, isLoading, isError, refetch } = useGetStaffQuery(undefined);
-  const staff: StaffMember[] = data ?? [];
+  const {
+    data: vendorsData,
+    isLoading: vendorsLoading,
+    isError: vendorsError,
+  } = useGetVendorsQuery(undefined);
+  const {
+    data: staffData,
+    isLoading: staffLoading,
+    isError: staffError,
+    refetch: refetchStaff,
+  } = useGetStaffQuery(undefined);
+  const { data: passesData } = useGetParkingPassesQuery(undefined);
+  const { data: vehicleTypesData } = useGetVehicleTypesQuery(undefined);
 
-  const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
-  const [page, setPage] = useState(0);
+  const vendors: Vendor[] = vendorsData ?? NONE;
+  const staff: StaffMember[] = staffData ?? NONE;
+  const passes: ParkingPassRow[] = passesData ?? NONE;
+  const vehicleTypes: VehicleTypeOption[] = vehicleTypesData ?? NONE;
+
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedKey = searchParams.get('tenant');
+
+  // Sampled once per mount so pass-expiry comparisons stay stable across
+  // renders (and so the render pass itself stays pure).
+  const [now] = useState(() => Date.now());
 
   const [sheetOpen, setSheetOpen] = useState(false);
   const [formMode, setFormMode] = useState<'create' | 'edit'>('create');
   const [selectedStaff, setSelectedStaff] = useState<StaffMember | null>(null);
+
+  const isLoading = vendorsLoading || staffLoading;
+  const isError = vendorsError || staffError;
+
+  // Staff carries no pass data, so an active pass is resolved from
+  // /parking/parking-passes — a pass covers its primary staff member plus
+  // every extra vehicle listed on it.
+  const passUntilByStaffId = useMemo(() => {
+    const map: Record<number, string> = {};
+    passes.forEach((pass) => {
+      if (!pass.is_active || !pass.valid_until) return;
+      if (new Date(pass.valid_until).getTime() < now) return;
+      [pass.staff, ...(pass.extra_vehicles ?? [])].forEach((vehicle) => {
+        if (!vehicle) return;
+        const current = map[vehicle.id];
+        if (!current || new Date(pass.valid_until) > new Date(current)) {
+          map[vehicle.id] = pass.valid_until;
+        }
+      });
+    });
+    return map;
+  }, [passes, now]);
+
+  const categoryByTypeName = useMemo(() => {
+    const map: Record<string, VehicleCategory> = {};
+    vehicleTypes.forEach((vt) => {
+      map[vt.name] = vt.category;
+    });
+    return map;
+  }, [vehicleTypes]);
+
+  // Staff.company is serialized as the vendor's (unique) name, so members are
+  // grouped by name rather than id.
+  const membersByCompany = useMemo(() => {
+    const map = new Map<string, TenantMember[]>();
+    staff.forEach((s) => {
+      const key = s.company ?? UNASSIGNED_KEY;
+      const member: TenantMember = {
+        ...s,
+        category: categoryFor(s.vehicle_type, categoryByTypeName),
+        active_pass_until: passUntilByStaffId[s.id] ?? null,
+      };
+      const bucket = map.get(key);
+      if (bucket) bucket.push(member);
+      else map.set(key, [member]);
+    });
+    return map;
+  }, [staff, categoryByTypeName, passUntilByStaffId]);
+
+  const rows: TenantRow[] = useMemo(() => {
+    const expiryCutoff = now + EXPIRING_WINDOW_DAYS * 86_400_000;
+
+    const build = (key: string, name: string, vendor: Vendor | null, members: TenantMember[]): TenantRow => ({
+      key,
+      name,
+      vendor,
+      members,
+      carsUsed: members.filter((m) => m.category === 'CAR').length,
+      bikesUsed: members.filter((m) => m.category === 'BIKE').length,
+      carQuota: vendor?.car_quota ?? 0,
+      bikeQuota: vendor?.bike_quota ?? 0,
+      activeCards: members.filter((m) => m.is_card_active).length,
+      monthlyPasses: members.filter((m) => m.active_pass_until).length,
+      expiringSoon: members.filter(
+        (m) => m.active_pass_until && new Date(m.active_pass_until).getTime() <= expiryCutoff
+      ).length,
+    });
+
+    const tenantRows = vendors.map((v) =>
+      build(String(v.id), v.name, v, membersByCompany.get(v.name) ?? [])
+    );
+
+    // Members whose company was cleared (Staff.company is nullable) would
+    // otherwise disappear from a tenant-first view.
+    const orphans = membersByCompany.get(UNASSIGNED_KEY) ?? [];
+    if (orphans.length > 0) {
+      tenantRows.push(build(UNASSIGNED_KEY, 'Unassigned members', null, orphans));
+    }
+
+    return tenantRows;
+  }, [vendors, membersByCompany, now]);
+
+  const selectedRow = selectedKey ? rows.find((r) => r.key === selectedKey) ?? null : null;
+
+  const selectTenant = (key: string) => {
+    setSearchParams({ tenant: key });
+  };
+
+  const clearTenant = () => {
+    setSearchParams({});
+  };
 
   const openRegisterVehicle = () => {
     setFormMode('create');
@@ -106,65 +180,15 @@ const TenantsPage = () => {
     setSheetOpen(true);
   };
 
-  const openVehicleDetail = (member: StaffMember) => {
+  const openMember = (member: TenantMember) => {
     setFormMode('edit');
     setSelectedStaff(member);
     setSheetOpen(true);
   };
 
-  const stats = useMemo(() => {
-    const total = staff.length;
-    const active = staff.filter((s) => s.is_card_active).length;
-    const monthly = staff.filter((s) => s.active_pass_until).length;
-    const now = Date.now();
-    const expiringSoon = staff
-      .filter((s) => s.active_pass_until)
-      .map((s) => new Date(s.active_pass_until as string))
-      .filter((d) => d.getTime() - now <= 30 * 86_400_000)
-      .sort((a, b) => a.getTime() - b.getTime());
-
-    return {
-      total,
-      active,
-      inactive: total - active,
-      tenantOnly: active - monthly,
-      monthly,
-      expiringCount: expiringSoon.length,
-      nextExpiring: expiringSoon[0] ?? null,
-    };
-  }, [staff]);
-
-  const filtered = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    return staff.filter((s) => {
-      if (statusFilter === 'active' && !s.is_card_active) return false;
-      if (statusFilter === 'inactive' && s.is_card_active) return false;
-      if (!term) return true;
-      return (
-        s.name.toLowerCase().includes(term) ||
-        s.license_plate.toLowerCase().includes(term) ||
-        (s.company || '').toLowerCase().includes(term)
-      );
-    });
-  }, [staff, search, statusFilter]);
-
-  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const clampedPage = Math.min(page, pageCount - 1);
-  const pageRows = filtered.slice(clampedPage * PAGE_SIZE, clampedPage * PAGE_SIZE + PAGE_SIZE);
-
-  const handleSearchChange = (value: string) => {
-    setSearch(value);
-    setPage(0);
-  };
-
-  const handleStatusChange = (value: 'all' | 'active' | 'inactive') => {
-    setStatusFilter(value);
-    setPage(0);
-  };
-
   return (
     <PageShell
-      title="Tenants & vehicles"
+      title={selectedRow ? selectedRow.name : 'Tenants & vehicles'}
       actions={
         <Button size="lg" onClick={openRegisterVehicle}>
           <Plus className="h-3.5 w-3.5" />
@@ -191,160 +215,33 @@ const TenantsPage = () => {
             ))}
           </div>
         </div>
-      ) : staff.length === 0 ? (
+      ) : rows.length === 0 ? (
         <EmptyState
           icon={UsersIcon}
           title="No tenants yet"
-          description="Tenants you add will show up here."
+          description="Tenants you add will show up here, along with the vehicles registered under them."
         />
+      ) : selectedKey && !selectedRow ? (
+        <EmptyState
+          icon={UsersIcon}
+          title="Tenant not found"
+          description="That tenant no longer exists. Go back to the directory to pick another one."
+        />
+      ) : selectedRow ? (
+        <TenantMembers row={selectedRow} onBack={clearTenant} onOpenMember={openMember} />
       ) : (
-        <div className="flex flex-col gap-4">
-          <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border lg:grid-cols-4">
-            <KpiTile
-              label="Registered"
-              value={stats.total}
-              caption={`${stats.active} active · ${stats.inactive} inactive`}
-            />
-            <KpiTile
-              label="Tenant permits"
-              value={stats.tenantOnly}
-              caption={stats.active > 0 ? `${Math.round((stats.tenantOnly / stats.active) * 100)}% of active` : '—'}
-            />
-            <KpiTile label="Monthly passes" value={stats.monthly} caption="time-boxed permits" />
-            <KpiTile
-              label={<span className="text-amber-600 dark:text-amber-400">Expiring ≤ 30d</span>}
-              value={<span className="text-amber-600 dark:text-amber-400">{stats.expiringCount}</span>}
-              caption={stats.nextExpiring ? `Next: ${formatDate(stats.nextExpiring.toISOString())}` : 'None upcoming'}
-            />
-          </div>
-
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="relative w-full sm:max-w-xs">
-              <Search className="pointer-events-none absolute top-1/2 left-2.5 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={search}
-                onChange={(e) => handleSearchChange(e.target.value)}
-                placeholder="Search plate, tenant, company…"
-                className="pl-8"
-              />
-            </div>
-            <select
-              value={statusFilter}
-              onChange={(e) => handleStatusChange(e.target.value as 'all' | 'active' | 'inactive')}
-              className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30"
-            >
-              <option value="all">All statuses</option>
-              <option value="active">Active</option>
-              <option value="inactive">Inactive</option>
-            </select>
-          </div>
-
-          <div className="overflow-x-auto rounded-lg border border-border">
-            <table className="w-full border-collapse text-sm">
-              <thead>
-                <tr className="border-b border-border bg-muted/40 text-left text-xs font-medium text-muted-foreground uppercase">
-                  <th className="w-9 px-3 py-2.5"></th>
-                  <th className="px-3 py-2.5">Tenant</th>
-                  <th className="px-3 py-2.5">Vehicle</th>
-                  <th className="px-3 py-2.5">Permit</th>
-                  <th className="px-3 py-2.5">Permit ends</th>
-                  <th className="px-3 py-2.5">Status</th>
-                  <th className="px-3 py-2.5 text-right">Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pageRows.map((s, i) => {
-                  const VehicleIcon = isBike(s.vehicle_type) ? Bike : Car;
-                  return (
-                    <tr
-                      key={s.id}
-                      className={cn(
-                        'border-b border-border last:border-0 hover:bg-muted/40',
-                        i % 2 === 1 && 'bg-muted/20'
-                      )}
-                    >
-                      <td className="px-3 py-2.5 text-muted-foreground">
-                        <VehicleIcon className="h-4 w-4" />
-                      </td>
-                      <td className="px-3 py-2.5">
-                        <div className="flex items-center gap-2.5">
-                          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent text-[11px] font-bold text-accent-foreground">
-                            {getInitials(s.name)}
-                          </span>
-                          <span className="truncate font-semibold text-foreground">{s.name}</span>
-                        </div>
-                      </td>
-                      <td className="px-3 py-2.5 font-mono text-[13px] tracking-tight text-foreground tabular-nums">
-                        {s.license_plate}
-                      </td>
-                      <td className="px-3 py-2.5">
-                        <PermitBadge hasActivePass={Boolean(s.active_pass_until)} />
-                      </td>
-                      <td className="px-3 py-2.5 font-mono text-[13px] tabular-nums text-foreground">
-                        {s.active_pass_until ? (
-                          formatDate(s.active_pass_until)
-                        ) : (
-                          <span className="text-muted-foreground">No expiry</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2.5">
-                        <StatusPill active={s.is_card_active} />
-                      </td>
-                      <td className="px-3 py-2.5 text-right">
-                        <button
-                          type="button"
-                          onClick={() => openVehicleDetail(s)}
-                          className="inline-flex items-center gap-1.5 text-xs font-semibold text-muted-foreground hover:text-primary"
-                        >
-                          <Eye className="h-3.5 w-3.5" />
-                          View
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="flex items-center justify-between text-xs font-medium text-muted-foreground">
-            <span>
-              Showing {clampedPage * PAGE_SIZE + 1}–{Math.min(filtered.length, clampedPage * PAGE_SIZE + PAGE_SIZE)} of{' '}
-              {filtered.length} vehicles
-            </span>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="icon-sm"
-                disabled={clampedPage === 0}
-                onClick={() => setPage((p) => Math.max(0, p - 1))}
-              >
-                <ChevronLeft className="h-3.5 w-3.5" />
-              </Button>
-              <span className="tabular-nums">
-                {clampedPage + 1} / {pageCount}
-              </span>
-              <Button
-                variant="outline"
-                size="icon-sm"
-                disabled={clampedPage >= pageCount - 1}
-                onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
-              >
-                <ChevronRight className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-          </div>
-        </div>
+        <TenantDirectory rows={rows} onSelect={selectTenant} />
       )}
 
       <VehicleFormSheet
         mode={formMode}
         staff={selectedStaff}
+        defaultCompanyId={selectedRow?.vendor?.id ?? null}
         open={sheetOpen}
         onOpenChange={setSheetOpen}
         onSaved={() => {
           setSheetOpen(false);
-          refetch();
+          refetchStaff();
         }}
       />
     </PageShell>

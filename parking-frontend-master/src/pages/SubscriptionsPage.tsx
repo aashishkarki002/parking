@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { Clock10Icon, Download, Plus, RefreshCcw, Search, TriangleAlert, X } from 'lucide-react';
@@ -218,9 +218,6 @@ const SubscriptionsPage = () => {
 
   const [updatePass] = useUpdateParkingPassMutation();
 
-  // Seeded once from the URL so links from the sidebar (e.g. Subscriptions ›
-  // Renewals due) land on the right tab without fighting local state
-  // changes afterwards.
   const [searchParams] = useSearchParams();
   const [tab, setTab] = useState<PassStatus | 'ALL'>(() => {
     const fromUrl = searchParams.get('tab');
@@ -233,6 +230,14 @@ const SubscriptionsPage = () => {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [addOpen, setAddOpen] = useState(false);
   const [actioning, setActioning] = useState<Set<number>>(new Set());
+
+  // Re-sync when the sidebar navigates here with a different ?tab= while the
+  // page is already mounted (query-only navigation doesn't remount).
+  useEffect(() => {
+    const fromUrl = searchParams.get('tab');
+    const next = TABS.some((t) => t.key === fromUrl) ? (fromUrl as PassStatus | 'ALL') : 'ALL';
+    setTab((current) => (current === next ? current : next));
+  }, [searchParams]);
 
   const now = dayjs();
 
@@ -662,12 +667,12 @@ const SubscriptionsPage = () => {
                             <div className="flex items-center gap-2.5">
                               <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent text-[11px] font-bold text-accent-foreground">
                                 {pass.staff.name
-                                  .split(' ')
+                                  ?.split(' ')
                                   .filter(Boolean)
                                   .map((p) => p[0])
                                   .slice(0, 2)
                                   .join('')
-                                  .toUpperCase()}
+                                  .toUpperCase() || '?'}
                               </span>
                               <div className="flex flex-col">
                                 <span className="text-[12.5px] font-semibold text-foreground">{pass.staff.name}</span>

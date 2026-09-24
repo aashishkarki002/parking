@@ -194,9 +194,9 @@ a {
   --ring: #4a90c4;
   --chart-1: #4a90c4;
   --chart-2: #aed6f1;
-  --chart-3: #166534;
-  --chart-4: #92400e;
-  --chart-5: #991b1b;
+  --chart-3: #34d399;
+  --chart-4: #fbbf24;
+  --chart-5: #f87171;
   --sidebar: #171b24;
   --sidebar-foreground: #f0eee9;
   --sidebar-primary: #4a90c4;
@@ -216,5 +216,37 @@ a {
   }
   html {
     @apply font-sans;
+  }
+}
+/* Scope changes on the dashboard: the figures fade up into place rather than
+   hard-swapping under the reader's eye. Short and non-blocking — the numbers
+   are readable the whole way through, this only signals that they changed. */
+@keyframes scope-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes scope-fade-in-flat {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.scope-fade {
+  animation: scope-fade-in 260ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scope-fade {
+    animation: scope-fade-in-flat 160ms ease-out;
   }
 }

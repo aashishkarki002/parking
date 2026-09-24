@@ -65,12 +65,15 @@ const selectClassName =
 interface VehicleFormSheetProps {
   mode: 'create' | 'edit';
   staff: StaffRecord | null;
+  // Pre-selects the tenant when registering from inside a tenant's member
+  // list, so the operator doesn't re-pick the tenant they just drilled into.
+  defaultCompanyId?: number | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSaved: () => void;
 }
 
-export function VehicleFormSheet({ mode, staff, open, onOpenChange, onSaved }: VehicleFormSheetProps) {
+export function VehicleFormSheet({ mode, staff, defaultCompanyId, open, onOpenChange, onSaved }: VehicleFormSheetProps) {
   const { data: vendors = [] } = useGetVendorsQuery(undefined) as { data: Vendor[] };
   const { data: vehicleTypes = [] } = useGetVehicleTypesQuery(undefined) as { data: VehicleType[] };
   const [createStaff, { isLoading: creating }] = useCreateStaffMutation();
@@ -102,10 +105,15 @@ export function VehicleFormSheet({ mode, staff, open, onOpenChange, onSaved }: V
         vehicle_type_id: vehicleType?.id,
       });
     } else {
-      reset({ name: '', license_plate: '', company_id: undefined, vehicle_type_id: undefined });
+      reset({
+        name: '',
+        license_plate: '',
+        company_id: defaultCompanyId ?? undefined,
+        vehicle_type_id: undefined,
+      });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, mode, staff, vendors, vehicleTypes]);
+  }, [open, mode, staff, vendors, vehicleTypes, defaultCompanyId]);
 
   const onSubmit = async (values: FormValues) => {
     try {

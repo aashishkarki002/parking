@@ -9,6 +9,9 @@ import { baseApiSlice } from '@/lib/public/baseApiSlice';
 //   POST /api/v1/parking/sessions/<ticket>/apply-stamp   (records a tenant's stamp; grants that tenant's free minutes)
 //   POST /api/v1/parking/sessions/tenant-card/scan       (preview only, no write)
 //   POST /api/v1/parking/sessions/tenant-card/confirm    (commits entry/exit)
+//   POST /api/v1/parking/rfid-tap                        (RFID card tap — toggles entry/exit)
+//   POST /api/v1/parking/rfid-force-entry                (operator fix: that "exit" was really an arrival)
+//   GET  /api/v1/parking/rfid-today                      (today's tenant sessions, parked first)
 //   GET  /api/v1/parking/staff/?search=<name|plate>      (manual lookup for offline OTP entry)
 //   POST /api/v1/parking/staff/                          (register vehicle)
 //   GET  /api/v1/parking/vehicle-types/                  (Car, Motorcycle, ...)
@@ -19,6 +22,7 @@ export const staffApi = 'parking/staff';
 export const vendorsApi = 'parking/vendors';
 export const vehicleTypesApi = 'parking/vehicle-types';
 export const parkingPassesApi = 'parking/parking-passes';
+export const rfidApi = 'parking/rfid';
 
 export const scanApiSlice = baseApiSlice.injectEndpoints({
   endpoints: (builder) => ({
@@ -106,6 +110,35 @@ export const scanApiSlice = baseApiSlice.injectEndpoints({
       },
       invalidatesTags: ['Sessions'],
     }),
+    rfidTap: builder.mutation({
+      query: ({ uid }: { uid: string }) => {
+        return {
+          url: `${rfidApi}-tap`,
+          method: 'POST',
+          data: { uid },
+        };
+      },
+      invalidatesTags: ['Sessions'],
+    }),
+    rfidForceEntry: builder.mutation({
+      query: ({ uid, session_id }: { uid: string; session_id?: string }) => {
+        return {
+          url: `${rfidApi}-force-entry`,
+          method: 'POST',
+          data: { uid, session_id },
+        };
+      },
+      invalidatesTags: ['Sessions'],
+    }),
+    getRfidToday: builder.query({
+      query: () => {
+        return {
+          url: `${rfidApi}-today`,
+          method: 'GET',
+        };
+      },
+      providesTags: ['Sessions'],
+    }),
     searchStaff: builder.query({
       query: (search: string) => {
         return {
@@ -150,6 +183,9 @@ export const scanApiSlice = baseApiSlice.injectEndpoints({
           method: 'GET',
         };
       },
+      // Tagged so edits made on the Vehicle types screen refresh every other
+      // consumer (vehicle form, tenants, register-vehicle dialog).
+      providesTags: ['VehicleTypes'],
     }),
     getVendors: builder.query({
       query: () => {
@@ -207,6 +243,9 @@ export const {
   useApplyCouponMutation,
   useTenantCardScanMutation,
   useTenantCardConfirmMutation,
+  useRfidTapMutation,
+  useRfidForceEntryMutation,
+  useGetRfidTodayQuery,
   useLazySearchStaffQuery,
   useLazyGetSessionByTicketQuery,
   useApplyStampMutation,
