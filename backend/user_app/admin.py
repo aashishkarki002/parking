@@ -7,8 +7,8 @@ from .models import User
 
 class CustomUserAdmin(UserAdmin):
     # The fields to be used in displaying the User model in admin
-    list_display = ('email', 'first_name', 'last_name', 'is_staff', 'is_superuser')
-    list_filter = ('is_staff', 'is_superuser', 'is_email_verified', 'is_phone_verified')
+    list_display = ('email', 'first_name', 'last_name', 'is_staff', 'is_superuser', 'get_roles')
+    list_filter = ('is_staff', 'is_superuser', 'groups', 'is_email_verified', 'is_phone_verified')
     fieldsets = (
         (None, {'fields': ('email', 'password')}),
         ('Personal Info', {'fields': ('first_name', 'last_name', 'phone_no', 'photo')}),
@@ -26,6 +26,10 @@ class CustomUserAdmin(UserAdmin):
     search_fields = ('email', 'first_name', 'last_name', 'phone_no')
     ordering = ('email',)
     filter_horizontal = ('groups', 'user_permissions',)
+
+    @admin.display(description='Roles')
+    def get_roles(self, obj):
+        return ', '.join(obj.groups.values_list('name', flat=True)) or '—'
 
 # Register the custom User model (and Group, needed to grant permissions
 # like delete_parkingsession) on the custom admin site, since that's the

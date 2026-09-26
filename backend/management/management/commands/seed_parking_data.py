@@ -450,10 +450,17 @@ class Command(BaseCommand):
         # are realistic candidates. add_stamp() recalculates the session's
         # stamp coverage itself, which may flip its status to STAMPED (fully
         # covered) or leave it COMPLETED with a TenantBill for the overage
-        # (see ParkingSession.refresh_stamp_coverage).
+        # (see ParkingSession.refresh_stamp_coverage). Tenant-vehicle sessions
+        # (a Staff card holder's own car — linked by plate in
+        # ParkingSession.save) are excluded: a tenant is billed for the
+        # visitors it stamps, never for its own vehicles, and add_stamp()
+        # rejects them outright.
         stamps = []
         tenant_bills = []
-        candidates = [s for s in sessions if s.status == "COMPLETED"]
+        candidates = [
+            s for s in sessions
+            if s.status == "COMPLETED" and not s.registered_staff_member_id
+        ]
         for session in candidates:
             if random.random() > 0.35:
                 continue

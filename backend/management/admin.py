@@ -12,7 +12,7 @@ import uuid
 from .models import (
     ParkingConfiguration, PricingPlan, VehicleType,
     Vendor, Staff, Coupon, CouponBatch,
-    ParkingPass, ParkingSession, CardScanLog, TicketStamp, TenantBill
+    ParkingPass, ParkingSession, CardScanLog, TicketStamp, TenantBill, RFIDCard
 )
 
 
@@ -44,7 +44,7 @@ class ParkingAdminSite(admin.AdminSite):
         # Organize models into groups
         config_models = [m for m in model_admins if
                          m[0].__name__ in ['ParkingConfiguration', 'PricingPlan', 'VehicleType']]
-        people_models = [m for m in model_admins if m[0].__name__ in ['Vendor', 'Staff']]
+        people_models = [m for m in model_admins if m[0].__name__ in ['Vendor', 'Staff', 'RFIDCard']]
         coupon_models = [m for m in model_admins if m[0].__name__ in ['CouponBatch', 'Coupon', 'ParkingPass']]
         activity_models = [m for m in model_admins if m[0].__name__ in ['ParkingSession', 'CardScanLog', 'TicketStamp', 'TenantBill']]
         user_models = [m for m in model_admins if m[0].__name__ in ['User', 'Group']]
@@ -137,7 +137,7 @@ class ReadOnlyAdmin(BaseAdmin):
 # System Configuration
 @admin.register(ParkingConfiguration, site=parking_admin_site)
 class ParkingConfigurationAdmin(ReadOnlyAdmin):
-    list_display = ('company_name', 'currency_symbol')
+    list_display = ('company_name', 'currency_symbol', 'tenant_allowance_enabled', 'tenant_free_hours')
 
     def has_add_permission(self, request):
         return not ParkingConfiguration.objects.exists()
@@ -145,7 +145,7 @@ class ParkingConfigurationAdmin(ReadOnlyAdmin):
 
 @admin.register(PricingPlan, site=parking_admin_site)
 class PricingPlanAdmin(BaseAdmin):
-    list_display = ('name', 'plan_type', 'minimum_charge')
+    list_display = ('name', 'plan_type', 'minimum_charge', 'night_rate_per_hour')
     search_fields = ('name',)
     list_filter = ('plan_type',)
 
@@ -171,6 +171,27 @@ class ParkingPassInline(admin.TabularInline):
     fields = ('valid_from', 'valid_until', 'price_paid', 'is_active')
 
 
+class RFIDCardInline(admin.TabularInline):
+    model = RFIDCard
+    extra = 0
+    fields = ('uid', 'is_active', 'created_at')
+    readonly_fields = ('created_at',)
+
+
+@admin.register(RFIDCard, site=parking_admin_site)
+class RFIDCardAdmin(BaseAdmin):
+    list_display = ('uid', 'staff', 'tenant_company', 'is_active', 'created_at')
+    list_filter = ('is_active', 'staff__company')
+    search_fields = ('uid', 'staff__name', 'staff__license_plate', 'staff__company__name')
+    autocomplete_fields = ('staff',)
+    readonly_fields = ('created_at',)
+
+    def tenant_company(self, obj):
+        return obj.staff.company
+    tenant_company.short_description = 'Tenant'
+    tenant_company.admin_order_field = 'staff__company__name'
+
+
 @admin.register(Staff, site=parking_admin_site)
 class StaffAdmin(BaseAdmin):
     list_display = ('name', 'license_plate', 'company', 'vehicle_type', 'is_card_active', 'card_links')
@@ -178,7 +199,7 @@ class StaffAdmin(BaseAdmin):
     list_filter = ('company', 'vehicle_type', 'is_card_active')
     autocomplete_fields = ('company', 'vehicle_type')
     readonly_fields = ('card_code', 'card_issued_at')
-    inlines = [ParkingPassInline]
+    inlines = [RFIDCardInline, ParkingPassInline]
     actions = ['deactivate_cards', 'reactivate_cards', 'regenerate_card_code']
 
     def card_links(self, obj):
@@ -317,6 +338,59 @@ class ParkingPassAdmin(BaseAdmin):
     search_fields = ('staff__name', 'staff__license_plate', 'extra_vehicles__name', 'extra_vehicles__license_plate')
     list_filter = ('is_active', 'payment_method', 'reminder_enabled')
     autocomplete_fields = ('staff', 'extra_vehicles')
+    readonly_fields = ('gate_cards',)
+    actions = ['renew_passes']
+
+    def gate_cards(self, obj):
+        """RFID cards of every vehicle on this pass. Cards belong to the
+        member, not the pass, so this is a read-only view — edit cards from
+        the tenant member's page."""
+        if obj is None or obj.pk is None:
+            return 'Save the pass to see the RFID cards it opens the gate for.'
+        now = timezone.now()
+        if obj.is_valid_at(now):
+            status = format_html('<strong style="color:#2e7d32">Gate access active until {}</strong>',
+                                 timezone.localtime(obj.valid_until).strftime('%Y-%m-%d %H:%M'))
+        elif (renewal := obj.renewal()) is not None:
+            status = format_html('This pass is not current — renewed until {}',
+                                 timezone.localtime(renewal.valid_until).strftime('%Y-%m-%d'))
+        else:
+            status = format_html('<strong style="color:#c62828">Not current — cards are refused at the gate</strong>')
+        rows = [
+            format_html(
+                '<li><a href="{}">{}</a> — {} ({}){}</li>',
+                reverse('parking_admin:management_rfidcard_change', args=[card.pk]),
+                card.uid, card.staff.name, card.staff.license_plate,
+                '' if card.is_active else ' — deactivated',
+            )
+            for staff in obj.all_vehicles()
+            for card in staff.rfid_cards.all()
+        ]
+        cards = format_html('<ul style="margin:6px 0 0 16px">{}</ul>', format_html(''.join(rows))) if rows \
+            else 'No RFID cards issued to the vehicles on this pass.'
+        return format_html('{}<br>{}', status, cards)
+    gate_cards.short_description = 'RFID gate access'
+
+    fieldsets = (
+        (None, {'fields': ('staff', 'extra_vehicles', 'valid_from', 'valid_until',
+                           'price_paid', 'payment_method', 'reminder_enabled', 'is_active', 'notes')}),
+        ('RFID cards', {'fields': ('gate_cards',)}),
+    )
+
+    def renew_passes(self, request, queryset):
+        renewed, skipped = [], []
+        for parking_pass in queryset.select_related('staff'):
+            if parking_pass.renewal() is not None:
+                skipped.append(parking_pass.staff.name)
+                continue
+            new_pass = parking_pass.renew()
+            renewed.append(f'{parking_pass.staff.name} (until {timezone.localtime(new_pass.valid_until):%Y-%m-%d})')
+        if renewed:
+            self.message_user(request, f'Renewed {len(renewed)} pass(es): {", ".join(renewed)}. '
+                                       'Their RFID cards work at the gate straight away.')
+        if skipped:
+            self.message_user(request, f'Skipped — already renewed: {", ".join(skipped)}.', level='warning')
+    renew_passes.short_description = "Renew selected passes (next period, same vehicles & price)"
 
     def print_pass_link(self, obj):
         return format_html(
@@ -377,11 +451,12 @@ class ParkingSessionAdmin(BaseAdmin):
     change_list_template = "admin/management/parkingsession/change_list.html"
     list_per_page = 50  # Fewer page turns, still light per request
 
-    list_display = ('ticket_number', 'vehicle_type', 'entry_time', 'exit_time', 'status',
-                    'calculated_charge', 'payment_method')
-    search_fields = ('ticket_number', 'license_plate')
+    list_display = ('ticket_number', 'vehicle_type', 'registered_staff_member', 'entry_time', 'exit_time',
+                    'status', 'calculated_charge', 'payment_method', 'auto_closed')
+    search_fields = ('ticket_number', 'license_plate', 'rfid_card__uid', 'registered_staff_member__name')
     list_filter = (
         'status',
+        'auto_closed',
         'vehicle_type',
         'payment_method',
         ('entry_time', DateRangeFilter),
@@ -405,7 +480,7 @@ class ParkingSessionAdmin(BaseAdmin):
         cl = self.get_changelist_instance(request)
         queryset = cl.get_queryset(request)
         # Use a single DB aggregate for total_net — no iterating over all rows
-        db_totals = queryset.aggregate(total_net=Sum('calculated_charge'))
+        db_totals = queryset.valid().aggregate(total_net=Sum('calculated_charge'))
         summary_totals = {
             'total_gross': Decimal('0.00'),
             'total_discount': Decimal('0.00'),
@@ -450,12 +525,13 @@ class ParkingSessionAdmin(BaseAdmin):
 
     autocomplete_fields = ('applied_coupon',)
     readonly_fields = ('id', 'ticket_number', 'duration_minutes', 'applied_pass', 'calculated_charge',
-                       'registered_staff_member', 'undiscounted_charge', 'discount_value', 'charge_after_discount')
+                       'registered_staff_member', 'undiscounted_charge', 'discount_value', 'charge_after_discount',
+                       'rfid_card', 'auto_closed')
     fieldsets = (
         ('Session Info', {'fields': ('id', 'ticket_number',
-         'status', 'vehicle_type', 'registered_staff_member')}),
+         'status', 'vehicle_type', 'registered_staff_member', 'rfid_card')}),
         ('Timestamps', {'fields': ('entry_time',
-         'exit_time', 'duration_minutes')}),
+         'exit_time', 'duration_minutes', 'auto_closed')}),
         ('Billing Breakdown', {'fields': ('undiscounted_charge', 'discount_value', 'charge_after_discount',
          'calculated_charge', 'payment_method', 'applied_coupon', 'applied_pass')}),
         ('Notes', {'fields': ('notes',), 'classes': ('collapse',)}),

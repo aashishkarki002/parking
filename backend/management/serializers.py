@@ -1,9 +1,15 @@
+import re
+from decimal import Decimal
+
+from django.contrib.auth.models import Group
 from rest_framework import serializers
 from .models import (
     ParkingConfiguration, PricingPlan, VehicleType, Vendor, Staff, Coupon,
     # --- ADD CouponBatch to imports ---
-    ParkingPass, ParkingSession, CouponBatch, TicketStamp, TenantBill
+    ParkingPass, ParkingSession, CouponBatch, TicketStamp, TenantBill, RFIDCard
 )
+from user_app.models import User
+from user_app.roles import ADMIN, ALL_ROLES, POS, SUPERADMIN
 
 
 # ... (ParkingConfigurationSerializer, PricingPlanSerializer, VehicleTypeSerializer, VendorSerializer, StaffSerializer - NO CHANGES) ...
@@ -11,20 +17,43 @@ from .models import (
 class ParkingConfigurationSerializer(serializers.ModelSerializer):
     class Meta:
         model = ParkingConfiguration
-        fields = ['id', 'currency_symbol', 'company_name']
+        fields = [
+            'id', 'currency_symbol', 'company_name',
+            'tenant_allowance_enabled', 'tenant_free_hours', 'tenant_lookback_hours',
+            'night_pricing_enabled', 'night_start', 'night_end',
+        ]
         read_only_fields = ['id']
+
+    def validate(self, data):
+        free = data.get('tenant_free_hours', getattr(self.instance, 'tenant_free_hours', None))
+        lookback = data.get('tenant_lookback_hours', getattr(self.instance, 'tenant_lookback_hours', None))
+        if free is not None and lookback is not None and free >= lookback:
+            raise serializers.ValidationError(
+                {'tenant_free_hours': 'Must be less than tenant_lookback_hours.'})
+        night_start = data.get('night_start', getattr(self.instance, 'night_start', None))
+        night_end = data.get('night_end', getattr(self.instance, 'night_end', None))
+        if night_start is not None and night_start == night_end:
+            raise serializers.ValidationError(
+                {'night_end': 'Must differ from night_start.'})
+        return data
 
 
 class PricingPlanSerializer(serializers.ModelSerializer):
+    night_rate_per_hour = serializers.DecimalField(
+        max_digits=8, decimal_places=2, min_value=Decimal('0'), required=False)
+
     class Meta:
         model = PricingPlan
-        fields = ['id', 'name', 'plan_type', 'rate_details', 'minimum_charge']
+        fields = ['id', 'name', 'plan_type', 'rate_details', 'minimum_charge', 'night_rate_per_hour']
 
 
 class VehicleTypeSerializer(serializers.ModelSerializer):
+    # `pricing_plan` is PricingPlan.__str__ — "<name> (Min: <x>)", not the bare
+    # name — so clients cannot match it back to a plan. `pricing_plan_id` is
+    # readable as well as writable so they can join on the id instead.
     pricing_plan = serializers.StringRelatedField()
     pricing_plan_id = serializers.PrimaryKeyRelatedField(
-        queryset=PricingPlan.objects.all(), source='pricing_plan', write_only=True
+        queryset=PricingPlan.objects.all(), source='pricing_plan'
     )
 
     class Meta:
@@ -46,6 +75,40 @@ class VendorSerializer(serializers.ModelSerializer):
         read_only_fields = [
             'external_tenant_id', 'car_quota', 'bike_quota', 'gate_access_allowed', 'last_synced_at', 'sync_source',
         ]
+
+
+class RFIDCardSerializer(serializers.ModelSerializer):
+    """Read shape of a card, and the only thing that can be changed on an
+    existing one: is_active (block a lost card at the gate). Re-assigning a
+    card to another member stays in the admin."""
+
+    class Meta:
+        model = RFIDCard
+        fields = ['id', 'uid', 'is_active', 'created_at']
+        read_only_fields = ['uid', 'created_at']
+
+
+class RFIDCardCreateSerializer(serializers.ModelSerializer):
+    """Issue a card to a member: the UID the booth reader types, plus who it
+    belongs to. New cards start active."""
+
+    class Meta:
+        model = RFIDCard
+        fields = ['id', 'uid', 'staff', 'is_active', 'created_at']
+        read_only_fields = ['is_active', 'created_at']
+        # The model's unique constraint would answer "rfid card with this uid
+        # already exists"; validate_uid says who holds it instead. The DB
+        # constraint stays as the backstop (see RFIDCardViewSet.create).
+        extra_kwargs = {'uid': {'validators': []}}
+
+    def validate_uid(self, value):
+        if not re.fullmatch(r'[0-9A-Za-z]+', value):
+            raise serializers.ValidationError('A card number has only letters and digits, no spaces.')
+        holder = RFIDCard.objects.select_related('staff').filter(uid=value).first()
+        if holder is not None:
+            raise serializers.ValidationError(
+                f'This card is already assigned to {holder.staff.name} ({holder.staff.license_plate}).')
+        return value
 
 
 class StaffSerializer(serializers.ModelSerializer):
@@ -92,6 +155,17 @@ class StaffSerializer(serializers.ModelSerializer):
             })
 
         return data
+
+
+class StaffWithCardsSerializer(StaffSerializer):
+    """The /staff endpoint's shape: StaffSerializer plus the member's RFID
+    cards. Kept off StaffSerializer itself because ParkingPassSerializer nests
+    that one, and passes have no use for card UIDs (or the extra query per
+    vehicle). Newest card first (RFIDCard.Meta.ordering)."""
+    rfid_cards = RFIDCardSerializer(many=True, read_only=True)
+
+    class Meta(StaffSerializer.Meta):
+        fields = StaffSerializer.Meta.fields + ['rfid_cards']
 
 
 # --- MODIFIED CouponSerializer ---
@@ -187,11 +261,11 @@ class ParkingSessionSerializer(serializers.ModelSerializer):
             'duration_minutes', 'applied_coupon', 'applied_pass',
             'calculated_charge', 'payment_method', 'status', 'notes',
             'undiscounted_charge', 'discount_value', 'charge_after_discount',
-            'stamps', 'total_stamp_minutes', 'tenant_bill',
+            'stamps', 'total_stamp_minutes', 'tenant_bill', 'auto_closed',
         ]
         read_only_fields = [
             'id', 'ticket_number', 'registered_staff_member', 'duration_minutes',
-            'applied_pass', 'calculated_charge', 'status', 'entry_time'
+            'applied_pass', 'calculated_charge', 'status', 'entry_time', 'auto_closed'
         ]
 
 
@@ -232,3 +306,81 @@ class CouponBatchSerializer(serializers.ModelSerializer):
                 "payment_method": "This field is required when the batch is marked as paid."
             })
         return data
+
+
+class OperatorSerializer(serializers.ModelSerializer):
+    """Login accounts for desk staff (pos/admin/superadmin Django Groups).
+
+    A user holds exactly one of the three roles here — they're escalating
+    tiers (see management/permissions.py), not independent grants — so
+    `role` is a single write-only choice and the read side (`to_representation`)
+    reports back whichever tier the account's groups currently resolve to.
+    """
+    role = serializers.ChoiceField(choices=[(r, r) for r in ALL_ROLES], write_only=True, required=False)
+    password = serializers.CharField(write_only=True, required=False, allow_blank=False)
+
+    class Meta:
+        model = User
+        fields = ['id', 'email', 'phone_no', 'is_active', 'role', 'password', 'date_joined']
+        read_only_fields = ['id', 'date_joined']
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # is_superuser is Django's own "bypasses every check" flag — treated as
+        # an automatic superadmin everywhere else (user_has_role), so it's
+        # reported as one here too rather than showing "No role" for an
+        # account whose access doesn't actually come from a group.
+        if instance.is_superuser:
+            data['role'] = SUPERADMIN
+        else:
+            group_names = set(instance.groups.values_list('name', flat=True))
+            # Highest tier first: an account seeded with more than one group
+            # (e.g. via the admin site) still reports as a single role.
+            data['role'] = next((r for r in (SUPERADMIN, ADMIN, POS) if r in group_names), None)
+        return data
+
+    def validate_email(self, value):
+        return value.strip().lower()
+
+    def validate_password(self, value):
+        if len(value) < 8:
+            raise serializers.ValidationError('Password must be at least 8 characters.')
+        return value
+
+    def validate(self, data):
+        request = self.context.get('request')
+        if self.instance is None:
+            if not data.get('password'):
+                raise serializers.ValidationError({'password': 'Password is required.'})
+            if not data.get('role'):
+                raise serializers.ValidationError({'role': 'Select a role.'})
+        else:
+            acting_user = getattr(request, 'user', None)
+            if acting_user and acting_user.pk == self.instance.pk:
+                role = data.get('role')
+                if role is not None and role != SUPERADMIN:
+                    raise serializers.ValidationError("You can't remove your own superadmin role.")
+                if data.get('is_active') is False:
+                    raise serializers.ValidationError("You can't deactivate your own account.")
+        return data
+
+    def create(self, validated_data):
+        role = validated_data.pop('role')
+        password = validated_data.pop('password')
+        user = User.objects.create_user(
+            email=validated_data.pop('email'), password=password, **validated_data
+        )
+        user.groups.set([Group.objects.get(name=role)])
+        return user
+
+    def update(self, instance, validated_data):
+        role = validated_data.pop('role', None)
+        password = validated_data.pop('password', None)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        if password:
+            instance.set_password(password)
+        instance.save()
+        if role:
+            instance.groups.set([Group.objects.get(name=role)])
+        return instance

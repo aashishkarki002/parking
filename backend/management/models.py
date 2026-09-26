@@ -1,11 +1,13 @@
 # parking_management/models.py
 
+import calendar
 import math
 import uuid
 import hmac
 import hashlib
 import struct
 import time
+from datetime import datetime, timedelta, time as time_of_day
 from decimal import Decimal
 import qrcode
 import io
@@ -26,6 +28,41 @@ class ParkingConfiguration(models.Model):
     currency_symbol = models.CharField(max_length=5, default='NRs')
     company_name = models.CharField(
         max_length=100, blank=True, default="Django Parking Inc.")
+
+    # --- Tenant free-parking allowance ---
+    # Every registered tenant vehicle (pass holder or not) parks free for
+    # tenant_free_hours, counted across all of its sessions in the rolling
+    # tenant_lookback_hours before entry — so exiting and re-entering never
+    # restarts the clock. Time past the allowance is billed at the vehicle's
+    # normal pricing plan. See ParkingSession._apply_tenant_allowance_billing.
+    tenant_allowance_enabled = models.BooleanField(
+        default=True,
+        help_text="When on, registered tenant vehicles park free only up to the allowance "
+                   "below; time past it is billed normally. When off, pass holders park "
+                   "free without limit and other tenants are billed like visitors."
+    )
+    tenant_free_hours = models.PositiveSmallIntegerField(
+        default=12,
+        help_text="Free parking hours per vehicle within the lookback period."
+    )
+    tenant_lookback_hours = models.PositiveSmallIntegerField(
+        default=24,
+        help_text="Rolling period the free hours are counted over. Earlier sessions in "
+                   "this period use up the allowance, so re-entering doesn't reset it."
+    )
+
+    # --- Night pricing ---
+    # Minutes inside [night_start, night_end) (local time, may wrap past
+    # midnight) are billed at the plan's night_rate_per_hour instead of its
+    # day pricing — for everyone, tenants and pass holders included. See
+    # ParkingSession._split_day_night.
+    night_pricing_enabled = models.BooleanField(
+        default=True,
+        help_text="When on, time parked inside the night window is billed at each "
+                   "pricing plan's night rate."
+    )
+    night_start = models.TimeField(default=time_of_day(22, 0))
+    night_end = models.TimeField(default=time_of_day(6, 0))
 
     def __str__(self): return "Parking System Global Configuration"
     def save(self, *args, **kwargs): self.pk = 1; super().save(*args, **kwargs)
@@ -50,6 +87,11 @@ class PricingPlan(models.Model):
     minimum_charge = models.DecimalField(
         max_digits=6, decimal_places=2, default=Decimal('0.00'),
         help_text="The minimum fee for this plan, if the calculated charge is > 0. Set to 0 for no minimum."
+    )
+    night_rate_per_hour = models.DecimalField(
+        max_digits=8, decimal_places=2, default=Decimal('0.00'),
+        help_text="Hourly rate for time inside the night window (ParkingConfiguration). "
+                   "0 means night time is billed like day time."
     )
     is_sample = models.BooleanField(
         default=False, db_index=True,
@@ -405,6 +447,14 @@ class CouponBatch(models.Model):
         verbose_name_plural = "Coupon Batch Purchases"
         ordering = ['-purchase_date']
 
+def _add_months(dt, months):
+    """dt moved forward by whole calendar months, clamped to the last day of
+    the target month (Jan 31 + 1 month = Feb 28/29)."""
+    month_index = dt.month - 1 + months
+    year, month = dt.year + month_index // 12, month_index % 12 + 1
+    return dt.replace(year=year, month=month, day=min(dt.day, calendar.monthrange(year, month)[1]))
+
+
 class ParkingPass(models.Model):
     PAYMENT_METHOD_CHOICES = [
         ('CASH', 'Cash'),
@@ -476,10 +526,105 @@ class ParkingPass(models.Model):
     def __str__(
             self): return f"Pass for {self.staff.name} (until {self.valid_until.strftime('%Y-%m-%d')})"
 
+    @classmethod
+    def active_for_staff(cls, staff, at=None):
+        """
+        The subscription pass covering this vehicle right now (as primary
+        holder or as one of a pass's extra_vehicles), or None. The single
+        source of truth for "does this tenant have an active subscription"
+        — the ticket flow and the RFID gate both go through here.
+        """
+        if staff is None:
+            return None
+        at = at or timezone.now()
+        return cls.objects.filter(
+            models.Q(staff=staff) | models.Q(extra_vehicles=staff),
+            valid_from__lte=at,
+            valid_until__gte=at,
+            is_active=True,
+        ).distinct().first()
+
+    def renewal(self):
+        """The active pass for the same holder that ends after this one, or
+        None. Used to stop a pass being renewed twice."""
+        return ParkingPass.objects.filter(
+            staff_id=self.staff_id, is_active=True, valid_until__gt=self.valid_until,
+        ).exclude(pk=self.pk).order_by('valid_until').first()
+
+    @transaction.atomic
+    def renew(self, now=None):
+        """
+        Create the next pass: same holder, extra vehicles, price and payment
+        method, for the same number of calendar months (at least one). It
+        starts where this one ends, or now if this one has already lapsed,
+        so a late renewal doesn't pay for days that are already over. The
+        holder's RFID cards need no change — the gate checks
+        active_for_staff, so they work again as soon as this pass exists.
+        """
+        now = now or timezone.now()
+        start = max(self.valid_until, now)
+        months = max(1, round((self.valid_until - self.valid_from).days / 30))
+        new_pass = ParkingPass.objects.create(
+            staff=self.staff,
+            valid_from=start,
+            valid_until=_add_months(timezone.localtime(start), months),
+            price_paid=self.price_paid,
+            payment_method=self.payment_method,
+            reminder_enabled=self.reminder_enabled,
+        )
+        new_pass.extra_vehicles.set(self.extra_vehicles.all())
+        return new_pass
+
     class Meta:
         verbose_name = "Subscription Pass"
         verbose_name_plural = "Subscription Passes"
         ordering = ['-valid_until']
+
+
+class RFIDCard(models.Model):
+    """
+    A 13.56MHz RFID card issued to a tenant member. The booth reader is a
+    keyboard wedge that types only the card's UID, so the UID is the whole
+    identity — every timestamp comes from the server. A member can hold
+    several cards over time (lost/replaced); deactivate the old one rather
+    than deleting it so its session history survives.
+    """
+    uid = models.CharField(
+        max_length=32, unique=True, db_index=True,
+        help_text="Digits the reader types when the card is tapped, e.g. 0012345678. "
+                   "Leading zeros matter — copy it exactly."
+    )
+    staff = models.ForeignKey(
+        Staff, on_delete=models.CASCADE, related_name='rfid_cards',
+        verbose_name="Tenant member"
+    )
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Uncheck to block this card at the gate (lost/returned) without losing history."
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        self.uid = (self.uid or '').strip()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.uid} ({self.staff.name})"
+
+    class Meta:
+        verbose_name = "RFID Card"
+        verbose_name_plural = "RFID Cards"
+        ordering = ['-created_at']
+
+
+class ParkingSessionQuerySet(models.QuerySet):
+    def valid(self):
+        """
+        Sessions whose timestamps are real. An auto_closed session's exit_time
+        is when staff corrected a missed tap, not when the car left, so it
+        must never feed a duration, usage or billing figure.
+        """
+        return self.exclude(auto_closed=True)
 
 
 class ParkingSession(models.Model):
@@ -524,9 +669,31 @@ class ParkingSession(models.Model):
         help_text="True if this record was generated by seed_parking_data. Never set manually."
     )
 
+    # --- RFID gate ---
+    rfid_card = models.ForeignKey(
+        RFIDCard, on_delete=models.PROTECT, null=True, blank=True,
+        related_name='sessions', editable=False,
+        help_text="The RFID card tapped to open this session, if any."
+    )
+    auto_closed = models.BooleanField(
+        default=False, db_index=True, editable=False,
+        help_text="Closed by a staff correction, not a real exit tap — exit_time is not when "
+                   "the car left. Excluded from every duration/usage/billing figure "
+                   "(ParkingSession.objects.valid())."
+    )
+
+    objects = ParkingSessionQuerySet.as_manager()
+
     class Meta:
         ordering = ['-entry_time']
         verbose_name = "Parking Session"
+        constraints = [
+            models.UniqueConstraint(
+                fields=['rfid_card'],
+                condition=models.Q(exit_time__isnull=True),
+                name='one_open_session_per_rfid_card',
+            ),
+        ]
 
     def __str__(self):
         return f"Ticket #{self.ticket_number or 'N/A'} ({self.license_plate or 'No Plate'}) - {self.get_status_display()}"
@@ -578,23 +745,21 @@ class ParkingSession(models.Model):
     def update_and_calculate_charges(self):
         if self.status in ['PAID', 'COVERED_BY_PASS'] or not self.exit_time:
             return
+        # A staff-corrected close has no real exit time to bill against.
+        if self.auto_closed:
+            return
 
         # Calculate duration if not set
         if not self.duration_minutes:
             self.duration_minutes = self.calculate_total_duration_minutes()
 
-        # Check for staff pass
-        if self.registered_staff_member:
-            active_pass = self.registered_staff_member.parking_passes.filter(
-                is_active=True,
-                valid_from__lte=self.exit_time,
-                valid_until__gte=self.exit_time
-            ).first()
-            if active_pass:
-                self.applied_pass = active_pass
-                self.calculated_charge = Decimal('0.00')
-                self.status = 'COVERED_BY_PASS'
-                return
+        # Registered tenant vehicles (pass holder or not) are billed against
+        # the tenant free-hours allowance instead of visitor-style free
+        # minutes — see _apply_tenant_allowance_billing. It returns False
+        # only when the allowance is off AND there's no active pass, in
+        # which case this falls through to the same visitor billing below.
+        if self.is_registered_tenant_vehicle and self._apply_tenant_allowance_billing():
+            return
 
         # A tenant stamp fully supersedes visitor billing — see
         # refresh_stamp_coverage — so a stamped ticket never reaches the
@@ -609,14 +774,78 @@ class ParkingSession(models.Model):
         if self.applied_coupon and self.applied_coupon.validation_type == 'FREE_MINUTES':
             free_minutes += self.applied_coupon.value_minutes
 
-        # Calculate chargeable minutes
+        # Free minutes come off the start of the stay; the rest is split
+        # into day and night minutes by the clock.
         chargeable_minutes = max(0, self.duration_minutes - free_minutes)
+        day, night = self._split_day_night(
+            self.entry_time + timedelta(minutes=free_minutes), chargeable_minutes)
+        self._bill(day, night)
 
-        # Calculate base charge
-        subtotal = self._calculate_charge_from_plan(chargeable_minutes)
+    # --- Night pricing ---
+
+    def _night_config(self):
+        """The global config if night pricing applies to this vehicle's plan,
+        else None — so a plan with no night rate bills every minute as day."""
+        plan = self.vehicle_type.pricing_plan
+        if not plan or plan.night_rate_per_hour <= 0:
+            return None
+        config = ParkingConfiguration.get_solo()
+        if not config.night_pricing_enabled or config.night_start == config.night_end:
+            return None
+        return config
+
+    @staticmethod
+    def _night_seconds_between(start, end, night_start, night_end):
+        """Seconds of [start, end) that fall inside the local-time night
+        window [night_start, night_end), which may wrap past midnight."""
+        if end <= start:
+            return 0.0
+        tz = timezone.get_current_timezone()
+        local_start = timezone.localtime(start, tz)
+        local_end = timezone.localtime(end, tz)
+        wraps = night_end <= night_start
+
+        seconds = 0.0
+        # Start a day early: a wrapping window that began yesterday evening
+        # still covers this morning.
+        day = local_start.date() - timedelta(days=1)
+        while day <= local_end.date():
+            window_start = timezone.make_aware(datetime.combine(day, night_start), tz)
+            end_day = day + timedelta(days=1) if wraps else day
+            window_end = timezone.make_aware(datetime.combine(end_day, night_end), tz)
+            overlap = (min(end, window_end) - max(start, window_start)).total_seconds()
+            seconds += max(0.0, overlap)
+            day += timedelta(days=1)
+        return seconds
+
+    def _split_day_night(self, start, minutes):
+        """Split `minutes` of parking starting at `start` into
+        (day_minutes, night_minutes)."""
+        minutes = max(0, int(minutes))
+        config = self._night_config()
+        if not minutes or not config:
+            return minutes, 0
+        night_seconds = self._night_seconds_between(
+            start, start + timedelta(minutes=minutes), config.night_start, config.night_end)
+        night = min(minutes, int(round(night_seconds / 60)))
+        return minutes - night, night
+
+    def _price(self, day_minutes, night_minutes):
+        """Day minutes through the plan's normal pricing, night minutes at
+        its flat night_rate_per_hour. Unrounded."""
+        charge = self._calculate_charge_from_plan(day_minutes)
+        plan = self.vehicle_type.pricing_plan
+        if night_minutes > 0 and plan:
+            charge += Decimal(night_minutes) / Decimal('60') * plan.night_rate_per_hour
+        return charge.quantize(Decimal('0.01'))
+
+    def _bill(self, day_minutes, night_minutes=0):
+        """Shared subtotal -> minimum-charge -> round -> status tail used by
+        both normal visitor billing and tenant allowance billing."""
+        subtotal = self._price(day_minutes, night_minutes)
 
         # Apply minimum charge only if there are chargeable minutes
-        if chargeable_minutes > 0:
+        if day_minutes + night_minutes > 0:
             pricing_plan = self.vehicle_type.pricing_plan
             if pricing_plan and pricing_plan.minimum_charge > 0 and subtotal < pricing_plan.minimum_charge:
                 subtotal = pricing_plan.minimum_charge
@@ -624,6 +853,104 @@ class ParkingSession(models.Model):
         # Set final charge and status
         self.calculated_charge = self._round_charge_up_to_multiple(subtotal)
         self.status = 'WAIVED' if self.calculated_charge == Decimal('0.00') else 'COMPLETED'
+
+    def _prior_minutes_in_lookback(self, lookback_start):
+        """
+        Day minutes this vehicle already parked between lookback_start and
+        this session's entry, from its earlier sessions. Only the part of each
+        session inside that range counts. Night minutes are always paid, so
+        they never use up the allowance. auto_closed sessions have no real
+        exit time, so they are skipped (objects.valid()).
+        """
+        prior = ParkingSession.objects.valid().filter(
+            registered_staff_member_id=self.registered_staff_member_id,
+            exit_time__gt=lookback_start,
+            entry_time__lt=self.entry_time,
+        ).exclude(pk=self.pk).values_list('entry_time', 'exit_time')
+
+        night_config = self._night_config()
+        seconds = 0.0
+        for entry, exit_ in prior:
+            start, end = max(entry, lookback_start), min(exit_, self.entry_time)
+            seconds += max(0.0, (end - start).total_seconds())
+            if night_config:
+                seconds -= self._night_seconds_between(
+                    start, end, night_config.night_start, night_config.night_end)
+        return int(max(0.0, seconds) // 60)
+
+    @staticmethod
+    def _fmt_minutes(minutes):
+        hours, mins = divmod(int(minutes), 60)
+        return f"{hours}h {mins}m" if mins else f"{hours}h"
+
+    def _apply_tenant_allowance_billing(self):
+        """
+        Billing for a registered tenant vehicle (pass holder or not). The
+        vehicle parks free for ParkingConfiguration.tenant_free_hours, minus
+        whatever it already parked in the tenant_lookback_hours before this
+        entry. Leaving and coming back therefore never resets the clock.
+        Time past the allowance is billed like a visitor's.
+
+        Returns True if this fully decided the charge/status, False if the
+        caller should fall through to normal visitor-style billing — which
+        only happens when the allowance is off AND there's no active pass.
+        """
+        # Mirrors the tenant-vehicle branch refresh_stamp_coverage already
+        # has: never covers a tenant's own vehicle, but drops any stray
+        # TenantBill left over from before it was linked to this Staff row.
+        self.refresh_stamp_coverage()
+
+        active_pass = self.registered_staff_member.parking_passes.filter(
+            is_active=True,
+            valid_from__lte=self.exit_time,
+            valid_until__gte=self.exit_time
+        ).first()
+        if active_pass:
+            self.applied_pass = active_pass
+
+        # Night minutes are billed to everyone, pass holders included; the
+        # free allowance and the pass only ever cover day minutes.
+        day_minutes, night_minutes = self._split_day_night(self.entry_time, self.duration_minutes)
+
+        config = ParkingConfiguration.get_solo()
+        if not config.tenant_allowance_enabled:
+            if not active_pass:
+                return False
+            self._bill(0, night_minutes)
+            if self.calculated_charge == Decimal('0.00'):
+                self.status = 'COVERED_BY_PASS'
+            return True
+
+        lookback_start = self.entry_time - timedelta(hours=config.tenant_lookback_hours)
+        prior_used = self._prior_minutes_in_lookback(lookback_start)
+        free_left = max(0, config.tenant_free_hours * 60 - prior_used)
+        over_minutes = max(0, day_minutes - free_left)
+
+        coupon_minutes = 0
+        if self.applied_coupon and self.applied_coupon.validation_type == 'FREE_MINUTES':
+            coupon_minutes = self.applied_coupon.value_minutes
+
+        chargeable = max(0, over_minutes - coupon_minutes)
+        self._bill(chargeable, night_minutes)
+
+        # Billing can be recalculated for the same session (e.g. a coupon
+        # applied after exit), so replace any earlier allowance line.
+        note = (f"Free allowance ({config.tenant_free_hours}h per {config.tenant_lookback_hours}h): "
+                f"{self._fmt_minutes(prior_used)} used before this entry, "
+                f"{self._fmt_minutes(min(free_left, day_minutes))} free this visit, "
+                f"{self._fmt_minutes(chargeable)} charged.")
+        if night_minutes:
+            note += (f" Night: {self._fmt_minutes(night_minutes)} charged at "
+                     f"{self.vehicle_type.pricing_plan.night_rate_per_hour}/h.")
+        kept = [line for line in (self.notes or '').splitlines()
+                if not line.startswith("Free allowance (")]
+        self.notes = '\n'.join([*kept, note]).strip()
+
+        if self.calculated_charge == Decimal('0.00') and active_pass:
+            # Distinguishes "subscriber, nothing owed" from the generic
+            # visitor-style WAIVED that _bill would set.
+            self.status = 'COVERED_BY_PASS'
+        return True
 
     def apply_coupon(self, coupon_code):
         if self.status not in ['ACTIVE', 'COMPLETED']:
@@ -644,6 +971,16 @@ class ParkingSession(models.Model):
     def total_stamp_minutes(self):
         return self.stamps.aggregate(total=Sum('free_minutes_granted'))['total'] or 0
 
+    @property
+    def is_registered_tenant_vehicle(self):
+        """
+        True when this ticket belongs to a tenant's own registered vehicle —
+        a Staff card holder, set either by the tenant-card flow or matched by
+        plate in save(). Stamping is a visitor-validation tool, so these
+        sessions are never stampable and never bill their tenant.
+        """
+        return self.registered_staff_member_id is not None
+
     def refresh_stamp_coverage(self):
         """
         A tenant stamp covers the visitor for free up to the sum of minutes
@@ -658,8 +995,17 @@ class ParkingSession(models.Model):
         since elapsed time keeps moving until exit) and at exit to
         finalize. Returns True if this session has stamps and was handled
         here (caller should skip normal charge calculation), False if there
-        are no stamps to consider.
+        are no stamps to consider — including tenant-vehicle sessions, which
+        are excluded from tenant billing entirely.
         """
+        # A tenant's own vehicle is never billed back to that tenant: only a
+        # stamped *visitor* ticket can produce a TenantBill. Drop any bill an
+        # earlier stamp left on such a session and fall through to normal
+        # visitor billing.
+        if self.is_registered_tenant_vehicle:
+            TenantBill.objects.filter(session=self).delete()
+            return False
+
         total_free = self.total_stamp_minutes
         if total_free <= 0:
             return False
@@ -669,8 +1015,9 @@ class ParkingSession(models.Model):
 
         if overage > 0:
             latest_stamp = self.stamps.order_by('-stamped_at').first()
-            amount = self._round_charge_up_to_multiple(
-                self._calculate_charge_from_plan(overage))
+            day, night = self._split_day_night(
+                self.entry_time + timedelta(minutes=total_free), overage)
+            amount = self._round_charge_up_to_multiple(self._price(day, night))
             TenantBill.objects.update_or_create(
                 session=self,
                 defaults={
@@ -692,6 +1039,11 @@ class ParkingSession(models.Model):
     def add_stamp(self, vendor):
         if self.status not in ['ACTIVE', 'COMPLETED', 'STAMPED']:
             raise ValidationError("Cannot stamp a completed or paid session.")
+
+        if self.is_registered_tenant_vehicle:
+            raise ValidationError(
+                "This ticket belongs to a registered tenant vehicle, not a visitor "
+                "— it cannot be stamped.")
 
         stamp = TicketStamp.objects.create(
             session=self, vendor=vendor, free_minutes_granted=vendor.stamp_free_minutes)
@@ -717,16 +1069,18 @@ class ParkingSession(models.Model):
 
     @property
     def undiscounted_charge(self):
+        if self.auto_closed:
+            return Decimal('0.00')
         if self.duration_minutes is None:
             if self.exit_time:
                 self.duration_minutes = self.calculate_total_duration_minutes()
             else:
                 return Decimal('0.00')
-        return self._calculate_charge_from_plan(self.duration_minutes).quantize(Decimal('0.01'))
+        return self._price(*self._split_day_night(self.entry_time, self.duration_minutes))
 
     @property
     def charge_after_discount(self):
-        if self.status == 'ACTIVE' or not self.exit_time:
+        if self.status == 'ACTIVE' or not self.exit_time or self.auto_closed:
             return Decimal('0.00')
 
         # Ensure duration_minutes is calculated if it's None
@@ -737,9 +1091,10 @@ class ParkingSession(models.Model):
         free_minutes_coupon = self.applied_coupon.value_minutes if (
                 self.applied_coupon and self.applied_coupon.validation_type == 'FREE_MINUTES') else 0
         free_minutes_stamps = self.total_stamp_minutes
-        chargeable_minutes = max(
-            0, self.duration_minutes - (free_minutes_grace + free_minutes_coupon + free_minutes_stamps))
-        return self._calculate_charge_from_plan(chargeable_minutes).quantize(Decimal('0.01'))
+        free_minutes = free_minutes_grace + free_minutes_coupon + free_minutes_stamps
+        chargeable_minutes = max(0, self.duration_minutes - free_minutes)
+        return self._price(*self._split_day_night(
+            self.entry_time + timedelta(minutes=free_minutes), chargeable_minutes))
 
     @property
     def discount_value(self):
@@ -903,13 +1258,15 @@ class CardScanLog(models.Model):
         ('PHYSICAL', 'Physical Card'),
         ('DIGITAL', 'Digital Card (Online)'),
         ('OFFLINE', 'Digital Card (Offline)'),
+        ('RFID', 'RFID Card'),
     ]
-    ACTION_CHOICES = [('ENTRY', 'Entry'), ('EXIT', 'Exit'), ('REJECTED', 'Rejected')]
+    ACTION_CHOICES = [('ENTRY', 'Entry'), ('EXIT', 'Exit'), ('REJECTED', 'Rejected'),
+                      ('FORCED_ENTRY', 'Forced Entry (staff correction)')]
 
     staff = models.ForeignKey(
         Staff, on_delete=models.CASCADE, related_name='scan_logs', null=True, blank=True)
     card_code_used = models.CharField(max_length=64, blank=True)
-    action = models.CharField(max_length=10, choices=ACTION_CHOICES)
+    action = models.CharField(max_length=12, choices=ACTION_CHOICES)
     source = models.CharField(max_length=10, choices=SOURCE_CHOICES, default='PHYSICAL')
     reject_reason = models.CharField(max_length=100, blank=True)
     scanned_at = models.DateTimeField(auto_now_add=True, db_index=True)

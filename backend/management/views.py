@@ -1,6 +1,6 @@
 from django.utils import timezone
 # pyrefly: ignore [missing-import]
-from rest_framework import viewsets, status
+from rest_framework import mixins, viewsets, status
 # pyrefly: ignore [missing-import]
 from rest_framework.decorators import action
 # pyrefly: ignore [missing-import]
@@ -8,7 +8,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.core.exceptions import ValidationError
 from django.db import transaction, IntegrityError
-from django.db.models import Q
+from django.db.models import Case, IntegerField, Q, Value, When
 from django.shortcuts import get_object_or_404, render
 from django.views import View
 from django.http import HttpResponse
@@ -41,6 +41,12 @@ import tempfile
 from rest_framework.permissions import AllowAny
 from django.conf import settings
 
+from rest_framework.exceptions import ValidationError as DRFValidationError
+
+from .permissions import (
+    IsAdminOrAbove, IsPOSOrAbove, IsPOSReadOnlyOrAdminAbove, IsSuperAdmin,
+)
+
 
 # WeasyPrint needs GTK native libraries which may be missing (notably on
 # Windows); defer its import to PDF-generation call time so the app can
@@ -57,14 +63,17 @@ def CSS(*args, **kwargs):
 
 from .models import (
     ParkingConfiguration, PricingPlan, VehicleType, Vendor, Staff, Coupon,
-    ParkingPass, ParkingSession, CouponBatch, CardScanLog, WebhookEventLog, TicketStamp, TenantBill  # <-- ADD CouponBatch to imports
+    ParkingPass, ParkingSession, CouponBatch, CardScanLog, WebhookEventLog, TicketStamp, TenantBill, RFIDCard  # <-- ADD CouponBatch to imports
 )
 from .serializers import (
     ParkingConfigurationSerializer, PricingPlanSerializer, VehicleTypeSerializer,
-    VendorSerializer, StaffSerializer, CouponSerializer, ParkingPassSerializer,
-    ParkingSessionSerializer, CouponBatchSerializer  # <-- ADD CouponBatchSerializer to imports
+    VendorSerializer, StaffWithCardsSerializer, RFIDCardSerializer, RFIDCardCreateSerializer, CouponSerializer, ParkingPassSerializer,
+    ParkingSessionSerializer, CouponBatchSerializer, OperatorSerializer  # <-- ADD CouponBatchSerializer to imports
 )
 from .sync import sync_vendor_from_payload
+from . import rfid
+from user_app.models import User
+from user_app.roles import ADMIN, SUPERADMIN, user_has_role
 
 
 # --- Foundational Model Views (No Changes) ---
@@ -73,6 +82,7 @@ class ParkingConfigurationView(APIView):
     """
     A view to retrieve and update the singleton Parking Configuration.
     """
+    permission_classes = [IsSuperAdmin]
 
     def get(self, request, format=None):
         config = ParkingConfiguration.get_solo()
@@ -91,27 +101,74 @@ class ParkingConfigurationView(APIView):
 class PricingPlanViewSet(viewsets.ModelViewSet):
     queryset = PricingPlan.objects.all()
     serializer_class = PricingPlanSerializer
+    permission_classes = [IsAdminOrAbove]
 
 
 class VehicleTypeViewSet(viewsets.ModelViewSet):
     queryset = VehicleType.objects.all()
     serializer_class = VehicleTypeSerializer
+    permission_classes = [IsPOSReadOnlyOrAdminAbove]
 
 
 class VendorViewSet(viewsets.ModelViewSet):
     queryset = Vendor.objects.all()
     serializer_class = VendorSerializer
+    permission_classes = [IsPOSReadOnlyOrAdminAbove]
 
 
 class StaffViewSet(viewsets.ModelViewSet):
-    queryset = Staff.objects.all()
-    serializer_class = StaffSerializer
+    # Tenant/vehicle records. pos needs read access at the gate — searching by
+    # plate/name for offline card entry (see Options.tsx) — but not to
+    # register or edit tenants, which stays a back-office (admin+) task.
+    queryset = Staff.objects.prefetch_related('rfid_cards').all()
+    serializer_class = StaffWithCardsSerializer
+    permission_classes = [IsPOSReadOnlyOrAdminAbove]
+
+
+class RFIDCardViewSet(mixins.CreateModelMixin, mixins.UpdateModelMixin, viewsets.GenericViewSet):
+    """Issue a tenant member's RFID card (POST uid + staff) and block/unblock
+    it at the gate (PATCH is_active). rfid.tap only admits cards with
+    is_active=True, so that flag — not Staff.is_card_active, which only the
+    QR-card flow reads — is the switch that stops a lost card. A card can't be
+    re-assigned or deleted here (its session history hangs off it); that stays
+    in the admin."""
+    queryset = RFIDCard.objects.select_related('staff')
+    serializer_class = RFIDCardSerializer
+    permission_classes = [IsAdminOrAbove]
+    http_method_names = ['post', 'patch']
+
+    def get_serializer_class(self):
+        return RFIDCardCreateSerializer if self.action == 'create' else RFIDCardSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            with transaction.atomic():
+                card = serializer.save()
+        except IntegrityError:
+            # Two desks issuing the same UID at once: validate_uid saw neither.
+            raise DRFValidationError({'uid': ['This card is already assigned to another member.']})
+        return Response(RFIDCardSerializer(card).data, status=status.HTTP_201_CREATED)
+
+
+class OperatorViewSet(viewsets.ModelViewSet):
+    """Login accounts for desk staff — superadmin-only, per the /operators route."""
+    queryset = User.objects.all().order_by('email')
+    serializer_class = OperatorSerializer
+    permission_classes = [IsSuperAdmin]
+
+    def perform_destroy(self, instance):
+        if instance.pk == self.request.user.pk:
+            raise DRFValidationError({'non_field_errors': ["You can't delete your own account."]})
+        instance.delete()
 
 
 class CouponViewSet(viewsets.ModelViewSet):
     # Modified queryset to improve performance when dealing with batches
     queryset = Coupon.objects.select_related('issued_by', 'batch').all()
     serializer_class = CouponSerializer
+    permission_classes = [IsAdminOrAbove]
 
 
 class ParkingPassViewSet(viewsets.ModelViewSet):
@@ -119,6 +176,7 @@ class ParkingPassViewSet(viewsets.ModelViewSet):
         'staff', 'staff__company', 'staff__vehicle_type'
     ).prefetch_related('extra_vehicles__company', 'extra_vehicles__vehicle_type').all()
     serializer_class = ParkingPassSerializer
+    permission_classes = [IsAdminOrAbove]
 
 
 # --- NEW CouponBatchViewSet ---
@@ -134,6 +192,7 @@ class CouponBatchViewSet(viewsets.ModelViewSet):
     # Use prefetch_related for a massive performance boost when loading coupons
     queryset = CouponBatch.objects.select_related('vendor').prefetch_related('coupons').all()
     serializer_class = CouponBatchSerializer
+    permission_classes = [IsAdminOrAbove]
 
     @action(detail=True, methods=['get'], url_path='printable-list')
     def printable_list(self, request, pk=None):
@@ -514,6 +573,7 @@ class ParkingSessionViewSet(viewsets.ModelViewSet):
     ).prefetch_related('stamps__vendor').all()
     serializer_class = ParkingSessionSerializer
     lookup_field = 'ticket_number'
+    permission_classes = [IsPOSOrAbove]
 
     def retrieve(self, request, *args, **kwargs):
         # Elapsed time keeps moving while a stamped ticket is still parked
@@ -570,7 +630,11 @@ class ParkingSessionViewSet(viewsets.ModelViewSet):
             serializer = self.get_serializer(session)
             return Response(serializer.data)
 
-        # Check for active subscription if not already covered by a pass
+        # Attribute an active subscription pass onto the session before
+        # billing — the actual charge/status (including any tenant
+        # access-window overage) is always decided by
+        # update_and_calculate_charges() below, so the pass check here only
+        # needs to wire up applied_pass/registered_staff_member/vehicle_type.
         if session.license_plate:
             active_pass = self._check_active_subscription(session.license_plate)
             if active_pass:
@@ -579,13 +643,7 @@ class ParkingSessionViewSet(viewsets.ModelViewSet):
                 staff = Staff.objects.filter(license_plate=session.license_plate).first()
                 session.applied_pass = active_pass
                 session.registered_staff_member = staff
-                session.status = 'COVERED_BY_PASS'
                 session.vehicle_type = staff.vehicle_type  # Update vehicle type from staff record
-                session.calculated_charge = 0
-                session.exit_time = timezone.now()
-                session.save()
-                serializer = self.get_serializer(session)
-                return Response(serializer.data)
 
         # Proceed with normal calculation if no active subscription
         if session.status not in ['ACTIVE', 'COMPLETED', 'STAMPED']:
@@ -607,14 +665,7 @@ class ParkingSessionViewSet(viewsets.ModelViewSet):
         Returns the active ParkingPass object if found, None otherwise.
         """
         staff = Staff.objects.filter(license_plate=license_plate).first()
-        if not staff:
-            return None
-        return ParkingPass.objects.filter(
-            Q(staff=staff) | Q(extra_vehicles=staff),
-            valid_from__lte=timezone.now(),
-            valid_until__gte=timezone.now(),
-            is_active=True
-        ).distinct().first()
+        return ParkingPass.active_for_staff(staff)
 
     @action(detail=True, methods=['post'], url_path='apply-coupon')
     def apply_coupon(self, request, ticket_number=None):
@@ -925,6 +976,7 @@ def _resolve_staff_from_scan(raw_card_code):
 
 
 @api_view(['POST'])
+@permission_classes([IsPOSOrAbove])
 def tenant_card_scan(request):
     """
     Step 1 of the tenant-card flow: look up the card, do NOT write anything.
@@ -958,6 +1010,7 @@ def tenant_card_scan(request):
 
 
 @api_view(['POST'])
+@permission_classes([IsPOSOrAbove])
 def tenant_card_confirm(request):
     """
     Step 2 of the tenant-card flow: operator has visually matched the plate,
@@ -1007,6 +1060,178 @@ def tenant_card_confirm(request):
         'action': 'entry',
         'session': serializer.data,
     }, status=status.HTTP_201_CREATED)
+
+
+# --- RFID gate (booth reader, keyboard wedge) — logic lives in rfid.py ---
+
+@api_view(['POST'])
+@permission_classes([IsPOSOrAbove])
+def rfid_tap(request):
+    """One tap toggles the tenant member in/out. See rfid.tap."""
+    uid = request.data.get('uid')
+    if not uid:
+        return Response({'status': 'invalid', 'error': 'uid is required'}, status=status.HTTP_400_BAD_REQUEST)
+    code, payload = rfid.tap(str(uid))
+    return Response(payload, status=code)
+
+
+@api_view(['POST'])
+@permission_classes([IsPOSOrAbove])
+def rfid_force_entry(request):
+    """
+    Operator correction when a tap was recorded as EXIT but the tenant was
+    actually arriving (they left earlier without tapping). Optional
+    session_id is the exit the POS just displayed. See rfid.force_entry.
+    """
+    uid = request.data.get('uid')
+    if not uid:
+        return Response({'status': 'invalid', 'error': 'uid is required'}, status=status.HTTP_400_BAD_REQUEST)
+    code, payload = rfid.force_entry(str(uid), request.data.get('session_id'))
+    return Response(payload, status=code)
+
+
+@api_view(['GET'])
+@permission_classes([IsPOSOrAbove])
+def rfid_today(request):
+    """Today's tenant sessions, currently parked first. See rfid.todays_sessions."""
+    return Response(rfid.todays_sessions())
+
+
+@api_view(['GET'])
+@permission_classes([IsPOSOrAbove])
+def rfid_lookup(request):
+    """Identify a card without tapping it through the gate. See rfid.lookup."""
+    uid = request.query_params.get('uid')
+    if not uid:
+        return Response({'error': 'uid is required'}, status=status.HTTP_400_BAD_REQUEST)
+    return Response(rfid.lookup(uid))
+
+
+# --- Global search (⌘K palette) -------------------------------------------
+
+SEARCH_MIN_LENGTH = 2
+SEARCH_DEFAULT_LIMIT = 5
+SEARCH_MAX_LIMIT = 10
+
+
+def _search_item(type_, id_, title, subtitle='', **meta):
+    return {'type': type_, 'id': str(id_), 'title': title, 'subtitle': subtitle, 'meta': meta}
+
+
+def _join(*parts):
+    return ' · '.join(p for p in parts if p)
+
+
+@api_view(['GET'])
+@permission_classes([IsPOSOrAbove])
+def global_search(request):
+    """Cross-entity lookup for the frontend's global search palette.
+
+    Returns a flat list of lightweight items grouped by `type`; groups the
+    caller's role can't see (passes, settings, operators) are left out rather
+    than returned empty, mirroring each viewset's own permission class.
+    """
+    q = (request.query_params.get('q') or '').strip()
+    if len(q) < SEARCH_MIN_LENGTH:
+        return Response({'q': q, 'results': []})
+    try:
+        limit = int(request.query_params.get('limit', SEARCH_DEFAULT_LIMIT))
+    except (TypeError, ValueError):
+        limit = SEARCH_DEFAULT_LIMIT
+    limit = max(1, min(limit, SEARCH_MAX_LIMIT))
+
+    is_admin = user_has_role(request.user, ADMIN, SUPERADMIN)
+    is_superadmin = user_has_role(request.user, SUPERADMIN)
+    results = []
+
+    # Sessions: exact ticket/plate hits first, then currently parked, then newest.
+    sessions = (
+        ParkingSession.objects.select_related('vehicle_type', 'registered_staff_member')
+        .filter(
+            Q(ticket_number__icontains=q)
+            | Q(license_plate__icontains=q)
+            | Q(registered_staff_member__name__icontains=q)
+        )
+        .annotate(
+            _exact=Case(
+                When(Q(ticket_number__iexact=q) | Q(license_plate__iexact=q), then=Value(0)),
+                default=Value(1), output_field=IntegerField(),
+            ),
+            _active=Case(
+                When(status='ACTIVE', then=Value(0)),
+                default=Value(1), output_field=IntegerField(),
+            ),
+        )
+        .order_by('_exact', '_active', '-entry_time')[:limit]
+    )
+    for s in sessions:
+        results.append(_search_item(
+            'session', s.id, s.license_plate or f'Ticket {s.ticket_number}',
+            _join(f'Ticket {s.ticket_number}', s.get_status_display(), s.vehicle_type.name,
+                  timezone.localtime(s.entry_time).strftime('%d %b %H:%M')),
+            ticket_number=s.ticket_number, license_plate=s.license_plate or '',
+        ))
+
+    members = (
+        Staff.objects.select_related('company', 'vehicle_type')
+        .filter(
+            Q(name__icontains=q) | Q(license_plate__icontains=q)
+            | Q(email__icontains=q) | Q(rfid_cards__uid__icontains=q)
+        )
+        .distinct().order_by('name')[:limit]
+    )
+    for m in members:
+        results.append(_search_item(
+            'member', m.id, m.name,
+            _join(m.license_plate, m.company.name if m.company else 'No tenant'),
+            vendor_id=m.company_id, license_plate=m.license_plate,
+        ))
+
+    tenants = Vendor.objects.filter(
+        Q(name__icontains=q) | Q(contact_person__icontains=q)
+        | Q(contact_email__icontains=q) | Q(external_tenant_id__icontains=q)
+    ).order_by('name')[:limit]
+    for v in tenants:
+        results.append(_search_item(
+            'tenant', v.id, v.name, _join(v.location, v.contact_person),
+        ))
+
+    if is_admin:
+        passes = (
+            ParkingPass.objects.select_related('staff')
+            .filter(
+                Q(staff__name__icontains=q) | Q(staff__license_plate__icontains=q)
+                | Q(extra_vehicles__license_plate__icontains=q)
+            )
+            .distinct().order_by('-valid_until')[:limit]
+        )
+        for p in passes:
+            state = 'Active' if p.is_active and p.valid_until >= timezone.now() else 'Inactive'
+            results.append(_search_item(
+                'pass', p.id, p.staff.name,
+                _join(p.staff.license_plate, state,
+                      f"until {timezone.localtime(p.valid_until).strftime('%d %b %Y')}"),
+                license_plate=p.staff.license_plate,
+            ))
+
+        for plan in PricingPlan.objects.filter(name__icontains=q).order_by('name')[:limit]:
+            results.append(_search_item('pricing_plan', plan.id, plan.name, plan.get_plan_type_display()))
+
+        for vt in VehicleType.objects.select_related('pricing_plan').filter(name__icontains=q).order_by('name')[:limit]:
+            results.append(_search_item(
+                'vehicle_type', vt.id, vt.name, vt.pricing_plan.name if vt.pricing_plan else '',
+            ))
+
+    if is_superadmin:
+        operators = User.objects.filter(
+            Q(email__icontains=q) | Q(first_name__icontains=q) | Q(last_name__icontains=q)
+        ).order_by('email')[:limit]
+        for u in operators:
+            results.append(_search_item(
+                'operator', u.id, u.get_full_name() or u.email, u.email,
+            ))
+
+    return Response({'q': q, 'results': results})
 
 
 # --- Dev-only: refresh local/staging DB with sample data -------------------

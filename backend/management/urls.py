@@ -10,10 +10,12 @@ router.register(r'pricing-plans', views.PricingPlanViewSet)
 router.register(r'vehicle-types', views.VehicleTypeViewSet)
 router.register(r'vendors', views.VendorViewSet)
 router.register(r'staff', views.StaffViewSet)
+router.register(r'rfid-cards', views.RFIDCardViewSet)
 router.register(r'coupons', views.CouponViewSet)
 router.register(r'coupon-batches', views.CouponBatchViewSet, basename='couponbatch')
 router.register(r'parking-passes', views.ParkingPassViewSet)
 router.register(r'sessions', views.ParkingSessionViewSet, basename='parkingsession')
+router.register(r'operators', views.OperatorViewSet, basename='operator')
 
 # The API URLs are now determined automatically by the router.
 urlpatterns = [
@@ -27,6 +29,11 @@ urlpatterns = [
     path('staff/card/<uuid:object_id>/token/', views.staff_card_token, name='staff-card-token'),
     path('sessions/tenant-card/scan', views.tenant_card_scan, name='tenant-card-scan'),
     path('sessions/tenant-card/confirm', views.tenant_card_confirm, name='tenant-card-confirm'),
+    path('rfid-tap', views.rfid_tap, name='rfid-tap'),
+    path('rfid-force-entry', views.rfid_force_entry, name='rfid-force-entry'),
+    path('rfid-today', views.rfid_today, name='rfid-today'),
+    path('rfid-lookup', views.rfid_lookup, name='rfid-lookup'),
+    path('search', views.global_search, name='global-search'),
 
     # EasyManage integration (Sallyan House gate) — full path:
     # /api/v1/parking/integrations/easymanage/webhook
