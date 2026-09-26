@@ -8,3 +8,7 @@ __pycache__/
 .venv/
 backend/venv/
 .DS_Store
+
+# Database dumps/backups (may contain customer data)
+*.sql
+*.dump

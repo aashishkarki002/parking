@@ -225,7 +225,7 @@ const SubscriptionsPage = () => {
   });
   const [termFilter, setTermFilter] = useState<'ALL' | '1' | '3' | '6' | 'OTHER'>('ALL');
   const [windowFilter, setWindowFilter] = useState<'ALL' | '30' | '90'>('ALL');
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(() => searchParams.get('search') ?? '');
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [addOpen, setAddOpen] = useState(false);
@@ -237,6 +237,12 @@ const SubscriptionsPage = () => {
     const fromUrl = searchParams.get('tab');
     const next = TABS.some((t) => t.key === fromUrl) ? (fromUrl as PassStatus | 'ALL') : 'ALL';
     setTab((current) => (current === next ? current : next));
+  }, [searchParams]);
+
+  // ?search= comes from the global search palette (see SessionsPage).
+  useEffect(() => {
+    const fromUrl = searchParams.get('search');
+    if (fromUrl !== null) setSearch(fromUrl);
   }, [searchParams]);
 
   const now = dayjs();

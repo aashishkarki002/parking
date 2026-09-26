@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Bike, Car, Check, Info, Loader2 } from 'lucide-react';
+import { Motorbike, Car, Check, Info, Loader2 } from 'lucide-react';
 import { toast } from 'react-toastify';
 import {
   useCreateParkingPassMutation,
@@ -34,7 +34,7 @@ type PermitKind = 'tenant' | 'monthly';
 const selectClasses =
   'h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30';
 
-const vehicleIconFor = (name: string) => (/bike|motor|scooter/i.test(name) ? Bike : Car);
+const vehicleIconFor = (name: string) => (/bike|motor|scooter/i.test(name) ? Motorbike : Car);
 
 const formatNRs = (amount: number) =>
   `NRs ${new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(Math.round(amount))}`;

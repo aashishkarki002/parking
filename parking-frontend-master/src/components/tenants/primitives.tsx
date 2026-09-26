@@ -5,13 +5,15 @@ export function KpiTile({
   label,
   value,
   caption,
+  className,
 }: {
   label: ReactNode;
   value: ReactNode;
   caption: ReactNode;
+  className?: string;
 }) {
   return (
-    <div className="flex flex-col gap-1.5 bg-card p-4">
+    <div className={cn('flex flex-col gap-1.5 bg-card p-4', className)}>
       <span className="text-[10.5px] font-semibold uppercase tracking-[0.09em] text-muted-foreground">{label}</span>
       <span className="text-[26px] leading-none font-bold tracking-tight tabular-nums text-foreground">{value}</span>
       <span className="text-xs text-muted-foreground">{caption}</span>

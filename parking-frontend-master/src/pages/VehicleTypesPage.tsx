@@ -12,6 +12,7 @@ import { ConfirmDeleteDialog } from '@/components/settings/ConfirmDeleteDialog';
 import { VehicleTypeDialog } from '@/components/settings/VehicleTypeDialog';
 import {
   formatDuration,
+  nightRateSummary,
   rateSummary,
   resolvePlan,
   type PricingPlan,
@@ -190,6 +191,11 @@ const VehicleTypesPage = () => {
                             <div className="text-[11.5px] text-muted-foreground">
                               {rateSummary(plan, currency)}
                             </div>
+                            {nightRateSummary(plan, currency, configData) && (
+                              <div className="text-[11.5px] text-muted-foreground">
+                                {nightRateSummary(plan, currency, configData)}
+                              </div>
+                            )}
                           </>
                         ) : (
                           <span className="flex items-center gap-1 text-[12.5px] text-amber-600 dark:text-amber-400">

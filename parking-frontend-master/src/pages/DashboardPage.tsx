@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { useGetSessionsQuery } from '@/app/(public)/(pages)/home/_redux/api';
 import { AppSidebar } from '@/components/app-sidebar';
+import { GlobalSearch } from '@/components/GlobalSearch';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -323,6 +324,7 @@ const DashboardPage = () => {
           </div>
 
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+            <GlobalSearch />
             <Button
               size="lg"
               onClick={() => navigate('/')}

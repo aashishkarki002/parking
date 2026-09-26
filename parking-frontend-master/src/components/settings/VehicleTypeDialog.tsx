@@ -18,6 +18,7 @@ import {
   useUpdateVehicleTypeMutation,
 } from '@/app/(public)/(pages)/settings/_redux/api';
 import {
+  nightRateSummary,
   rateSummary,
   resolvePlan,
   type PricingPlan,
@@ -161,6 +162,7 @@ export function VehicleTypeDialog({
               {selectedPlan && (
                 <p className="text-[11.5px] text-muted-foreground">
                   {rateSummary(selectedPlan, currency)}
+                  {nightRateSummary(selectedPlan, currency) && ` · ${nightRateSummary(selectedPlan, currency)}`}
                 </p>
               )}
               {plans.length === 0 && (

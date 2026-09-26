@@ -250,3 +250,136 @@ a {
     animation: scope-fade-in-flat 160ms ease-out;
   }
 }
+
+/* Adding an RFID card (components/tenants/MemberCardDialog). A tap is a
+   physical event, so the motion is one continuous gesture, not decoration:
+   thin rings radiate across the card as it is "read", and the number rolls
+   in digit by digit like an odometer. Only transform and opacity animate, on
+   the same ease-out curve as the rest of the app and with no overshoot.
+   Every effect has a reduced-motion equivalent. */
+@keyframes uid-reel {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(var(--to));
+  }
+}
+
+/* Each digit is a 20-cell strip (0-9 twice) so even a 0 spins a full turn.
+   The resting transform is the landed position, so with animation off the
+   digit is simply already there. */
+.uid-reel {
+  transform: translateY(var(--to));
+  animation: uid-reel var(--dur, 560ms) cubic-bezier(0.22, 1, 0.36, 1) var(--delay, 0ms) both;
+}
+
+@keyframes tap-ring {
+  from {
+    transform: translate(-50%, -50%) scale(0.12);
+    opacity: 0.6;
+  }
+  to {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 0;
+  }
+}
+
+.tap-ring {
+  position: absolute;
+  left: 50%;
+  top: 58%;
+  width: 26rem;
+  aspect-ratio: 1;
+  border-radius: 9999px;
+  border: 1.5px solid rgb(255 255 255 / 0.55);
+  pointer-events: none;
+  animation: tap-ring 900ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.tap-ring + .tap-ring {
+  animation-delay: 140ms;
+}
+
+/* Identify page: a card rising into place when it's read. */
+@keyframes identify-in {
+  from {
+    transform: translateY(14px) scale(0.96);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+.identify-in {
+  animation: identify-in 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .identify-in {
+    animation: none;
+  }
+}
+
+/* The armed-reader indicator: a ring that breathes out from the icon. */
+@keyframes listen-ring {
+  from {
+    transform: scale(1);
+    opacity: 0.4;
+  }
+  to {
+    transform: scale(1.9);
+    opacity: 0;
+  }
+}
+
+.listen-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  border: 1.5px solid currentColor;
+  pointer-events: none;
+  animation: listen-ring 2200ms cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+
+.listen-ring + .listen-ring {
+  animation-delay: 1100ms;
+}
+
+@keyframes pop-in {
+  from {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+.pop-in {
+  animation: pop-in 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .uid-reel,
+  .tap-ring {
+    animation: none;
+  }
+  .tap-ring {
+    display: none;
+  }
+  /* Still say "listening" without moving: a static ring instead of a pulse. */
+  .listen-ring {
+    animation: none;
+    opacity: 0.3;
+  }
+  .listen-ring + .listen-ring {
+    display: none;
+  }
+  .pop-in {
+    animation: scope-fade-in-flat 160ms ease-out both;
+  }
+}

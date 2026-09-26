@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ArrowLeft, Bike, Car, ChevronLeft, ChevronRight, Eye, Search } from 'lucide-react';
+import { ArrowLeft, Motorbike, Car, ChevronLeft, ChevronRight, Eye, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
@@ -170,7 +170,7 @@ export function TenantMembers({ row, onBack, onOpenMember }: TenantMembersProps)
           </thead>
           <tbody>
             {pageRows.map((m, i) => {
-              const VehicleIcon = m.category === 'BIKE' ? Bike : Car;
+              const VehicleIcon = m.category === 'BIKE' ? Motorbike : Car;
               return (
                 <tr
                   key={m.id}

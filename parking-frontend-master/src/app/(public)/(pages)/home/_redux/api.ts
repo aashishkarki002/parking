@@ -12,17 +12,48 @@ import { baseApiSlice } from '@/lib/public/baseApiSlice';
 //   POST /api/v1/parking/rfid-tap                        (RFID card tap — toggles entry/exit)
 //   POST /api/v1/parking/rfid-force-entry                (operator fix: that "exit" was really an arrival)
 //   GET  /api/v1/parking/rfid-today                      (today's tenant sessions, parked first)
+//   GET  /api/v1/parking/rfid-lookup?uid=<uid>           (whose card is this — read-only, no gate action)
 //   GET  /api/v1/parking/staff/?search=<name|plate>      (manual lookup for offline OTP entry)
 //   POST /api/v1/parking/staff/                          (register vehicle)
+//   POST  /api/v1/parking/rfid-cards                     (issue an RFID card to a member — uid + staff)
+//   PATCH /api/v1/parking/rfid-cards/<id>                (block/unblock a member's RFID card — is_active only)
 //   GET  /api/v1/parking/vehicle-types/                  (Car, Motorcycle, ...)
 //   GET  /api/v1/parking/vendors/                        (tenant companies / units)
 //   POST /api/v1/parking/parking-passes/                 (issue a monthly pass)
+//   GET  /api/v1/parking/search?q=<term>                 (global ⌘K search across sessions, members, tenants, ...)
 export const scanApi = 'parking/sessions';
 export const staffApi = 'parking/staff';
 export const vendorsApi = 'parking/vendors';
 export const vehicleTypesApi = 'parking/vehicle-types';
 export const parkingPassesApi = 'parking/parking-passes';
 export const rfidApi = 'parking/rfid';
+export const globalSearchApi = 'parking/search';
+
+export type GlobalSearchType =
+  | 'session'
+  | 'member'
+  | 'tenant'
+  | 'pass'
+  | 'pricing_plan'
+  | 'vehicle_type'
+  | 'operator';
+
+export interface GlobalSearchResult {
+  type: GlobalSearchType;
+  id: string;
+  title: string;
+  subtitle: string;
+  meta: {
+    ticket_number?: string;
+    license_plate?: string;
+    vendor_id?: number | null;
+  };
+}
+
+export interface GlobalSearchResponse {
+  q: string;
+  results: GlobalSearchResult[];
+}
 
 export const scanApiSlice = baseApiSlice.injectEndpoints({
   endpoints: (builder) => ({
@@ -139,6 +170,26 @@ export const scanApiSlice = baseApiSlice.injectEndpoints({
       },
       providesTags: ['Sessions'],
     }),
+    rfidLookup: builder.query({
+      query: (uid: string) => {
+        return {
+          url: `${rfidApi}-lookup`,
+          method: 'GET',
+          params: { uid },
+        };
+      },
+      keepUnusedDataFor: 0,
+    }),
+    globalSearch: builder.query<GlobalSearchResponse, string>({
+      query: (q) => {
+        return {
+          url: globalSearchApi,
+          method: 'GET',
+          params: { q },
+        };
+      },
+      keepUnusedDataFor: 30,
+    }),
     searchStaff: builder.query({
       query: (search: string) => {
         return {
@@ -233,6 +284,24 @@ export const scanApiSlice = baseApiSlice.injectEndpoints({
         };
       },
     }),
+    createRfidCard: builder.mutation({
+      query: ({ staff, uid }: { staff: number; uid: string }) => {
+        return {
+          url: `${rfidApi}-cards`,
+          method: 'POST',
+          data: { staff, uid },
+        };
+      },
+    }),
+    updateRfidCard: builder.mutation({
+      query: ({ id, is_active }: { id: number; is_active: boolean }) => {
+        return {
+          url: `${rfidApi}-cards/${id}`,
+          method: 'PATCH',
+          data: { is_active },
+        };
+      },
+    }),
   }),
 });
 
@@ -246,7 +315,9 @@ export const {
   useRfidTapMutation,
   useRfidForceEntryMutation,
   useGetRfidTodayQuery,
+  useLazyRfidLookupQuery,
   useLazySearchStaffQuery,
+  useGlobalSearchQuery,
   useLazyGetSessionByTicketQuery,
   useApplyStampMutation,
   useGetSessionsQuery,
@@ -258,5 +329,7 @@ export const {
   useGetParkingPassesQuery,
   useUpdateParkingPassMutation,
   useUpdateStaffMutation,
+  useCreateRfidCardMutation,
+  useUpdateRfidCardMutation,
 } = scanApiSlice;
 

@@ -10,8 +10,11 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { KpiTile } from '@/components/tenants/primitives';
 import { ConfirmDeleteDialog } from '@/components/settings/ConfirmDeleteDialog';
 import { PricingPlanDialog } from '@/components/settings/PricingPlanDialog';
+import { NightPricingCard } from '@/components/settings/NightPricingCard';
 import {
   formatMoney,
+  hasNightRate,
+  nightWindowLabel,
   planTypeLabel,
   planWarning,
   rateSummary,
@@ -47,6 +50,8 @@ const PricingPlansPage = () => {
   const plans: PricingPlan[] = plansData ?? NONE;
   const vehicleTypes: VehicleType[] = vehicleTypesData ?? NONE;
   const currency: string = configData?.currency_symbol ?? 'NRs';
+  // Unknown (undefined) for admins, who can't read the configuration.
+  const nightEnabled: boolean | undefined = configData?.night_pricing_enabled;
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<'create' | 'edit'>('create');
@@ -73,7 +78,8 @@ const PricingPlansPage = () => {
     const incomplete = plans.filter((p) => planWarning(p)).length;
     const withMinimum = plans.filter((p) => Number(p.minimum_charge ?? 0) > 0).length;
     const priced = vehicleTypes.filter((vt) => resolvePlan(plans, vt)).length;
-    return { unused, incomplete, withMinimum, priced };
+    const withNightRate = plans.filter(hasNightRate).length;
+    return { unused, incomplete, withMinimum, priced, withNightRate };
   }, [plans, vehicleTypes, typesByPlanId]);
 
   const openCreate = () => {
@@ -117,8 +123,8 @@ const PricingPlansPage = () => {
         </div>
       ) : isLoading ? (
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border lg:grid-cols-4">
-            {Array.from({ length: 4 }).map((_, i) => (
+          <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border lg:grid-cols-5">
+            {Array.from({ length: 5 }).map((_, i) => (
               <div key={i} className="bg-card p-4">
                 <Skeleton className="h-8 w-20" />
               </div>
@@ -138,7 +144,7 @@ const PricingPlansPage = () => {
         />
       ) : (
         <div className="flex flex-col gap-4">
-          <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border lg:grid-cols-4">
+          <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border lg:grid-cols-5">
             <KpiTile
               label="Plans"
               value={plans.length}
@@ -155,11 +161,30 @@ const PricingPlansPage = () => {
               caption="Charge floor once billable"
             />
             <KpiTile
+              label="With a night rate"
+              value={stats.withNightRate}
+              caption={
+                nightEnabled === false
+                  ? 'Night pricing is off'
+                  : configData
+                    ? `Billed ${nightWindowLabel(configData)}`
+                    : 'Billed inside the night window'
+              }
+            />
+            <KpiTile
+              className="col-span-2 lg:col-span-1"
               label="Needs attention"
               value={stats.incomplete}
               caption={stats.incomplete ? 'Plans that charge nothing' : 'All plans have rates'}
             />
           </div>
+
+          {configData && (
+            <NightPricingCard
+              key={`${configData.night_pricing_enabled}-${configData.night_start}-${configData.night_end}`}
+              config={configData}
+            />
+          )}
 
           <div className="overflow-x-auto rounded-lg border border-border">
             <table className="w-full border-collapse text-sm">
@@ -167,6 +192,12 @@ const PricingPlansPage = () => {
                 <tr className="border-b border-border bg-muted/40 text-left text-xs font-medium uppercase text-muted-foreground">
                   <th className="px-3 py-2.5">Plan</th>
                   <th className="px-3 py-2.5">Rate</th>
+                  <th className="px-3 py-2.5">
+                    Night rate
+                    {configData && nightEnabled && (
+                      <span className="ml-1 normal-case font-normal">({nightWindowLabel(configData)})</span>
+                    )}
+                  </th>
                   <th className="px-3 py-2.5">Minimum</th>
                   <th className="px-3 py-2.5">Used by</th>
                   <th className="px-3 py-2.5 text-right">Actions</th>
@@ -192,6 +223,18 @@ const PricingPlansPage = () => {
                       </td>
                       <td className="px-3 py-2.5 text-[13px] text-foreground">
                         {rateSummary(plan, currency)}
+                      </td>
+                      <td className="px-3 py-2.5 font-mono text-[13px] tabular-nums text-foreground">
+                        {hasNightRate(plan) ? (
+                          <span className={nightEnabled === false ? 'text-muted-foreground line-through' : undefined}>
+                            {formatMoney(plan.night_rate_per_hour, currency)} / hour
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">Same as day</span>
+                        )}
+                        {hasNightRate(plan) && nightEnabled === false && (
+                          <div className="font-sans text-[11px] text-muted-foreground">Night pricing off</div>
+                        )}
                       </td>
                       <td className="px-3 py-2.5 font-mono text-[13px] tabular-nums text-foreground">
                         {Number(plan.minimum_charge ?? 0) > 0 ? (
@@ -256,6 +299,7 @@ const PricingPlansPage = () => {
         mode={dialogMode}
         plan={activePlan}
         currency={currency}
+        nightConfig={configData}
         open={dialogOpen}
         onOpenChange={setDialogOpen}
       />

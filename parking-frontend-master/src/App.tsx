@@ -13,6 +13,7 @@ import VehicleTypesPage from './pages/VehicleTypesPage';
 import ManageOperatorsPage from './pages/ManageOperatorsPage';
 import ReportsPage from './pages/ReportsPage';
 import RfidTodayPage from './pages/RfidTodayPage';
+import IdentifyCardPage from './pages/IdentifyCardPage';
 import MaintenancePage from './pages/MaintenancePage';
 import { RequireRole } from './components/RequireRole';
 import { ROLE_ADMIN, ROLE_POS, ROLE_SUPERADMIN } from './lib/public/roles';
@@ -29,6 +30,7 @@ function App() {
       <Route path="/properties" element={<RequireRole roles={ADMIN_UP}><PropertiesPage /></RequireRole>} />
       <Route path="/sessions" element={<RequireRole roles={POS_UP}><SessionsPage /></RequireRole>} />
       <Route path="/tenant-gate-today" element={<RequireRole roles={POS_UP}><RfidTodayPage /></RequireRole>} />
+      <Route path="/identify-card" element={<RequireRole roles={POS_UP}><IdentifyCardPage /></RequireRole>} />
       <Route path="/tenants" element={<RequireRole roles={ADMIN_UP}><TenantsPage /></RequireRole>} />
       <Route path="/subscription" element={<RequireRole roles={ADMIN_UP}><SubscriptionsPage /></RequireRole>} />
       <Route path="/billing" element={<RequireRole roles={ADMIN_UP}><BillingPage /></RequireRole>} />

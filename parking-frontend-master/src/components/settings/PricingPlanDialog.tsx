@@ -18,7 +18,14 @@ import {
   useCreatePricingPlanMutation,
   useUpdatePricingPlanMutation,
 } from '@/app/(public)/(pages)/settings/_redux/api';
-import { PLAN_TYPES, sortedTiers, type PlanType, type PricingPlan } from '@/components/settings/types';
+import {
+  nightWindowLabel,
+  PLAN_TYPES,
+  sortedTiers,
+  type NightPricingConfig,
+  type PlanType,
+  type PricingPlan,
+} from '@/components/settings/types';
 
 const selectClassName =
   'h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30';
@@ -37,6 +44,11 @@ const schema = yup.object({
     .typeError('Enter a number')
     .min(0, 'Cannot be negative')
     .required('Minimum charge is required'),
+  night_rate_per_hour: yup
+    .number()
+    .typeError('Enter a number')
+    .min(0, 'Cannot be negative')
+    .required('Night rate is required'),
   rate_per_hour: yup
     .number()
     .typeError('Enter a number')
@@ -84,6 +96,7 @@ const emptyValues: FormValues = {
   name: '',
   plan_type: 'HOURLY',
   minimum_charge: 0,
+  night_rate_per_hour: 0,
   rate_per_hour: 0,
   rate_per_day: 0,
   tiers: [],
@@ -93,11 +106,13 @@ interface PricingPlanDialogProps {
   mode: 'create' | 'edit';
   plan: PricingPlan | null;
   currency: string;
+  // Absent for admins — the configuration endpoint is superadmin-only.
+  nightConfig?: NightPricingConfig | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
-export function PricingPlanDialog({ mode, plan, currency, open, onOpenChange }: PricingPlanDialogProps) {
+export function PricingPlanDialog({ mode, plan, currency, nightConfig, open, onOpenChange }: PricingPlanDialogProps) {
   const [createPlan, { isLoading: creating }] = useCreatePricingPlanMutation();
   const [updatePlan, { isLoading: updating }] = useUpdatePricingPlanMutation();
 
@@ -124,6 +139,7 @@ export function PricingPlanDialog({ mode, plan, currency, open, onOpenChange }: 
         name: plan.name,
         plan_type: plan.plan_type,
         minimum_charge: Number(plan.minimum_charge ?? 0),
+        night_rate_per_hour: Number(plan.night_rate_per_hour ?? 0),
         rate_per_hour: Number(details.rate_per_hour ?? 0),
         rate_per_day: Number(details.rate_per_day ?? 0),
         tiers: sortedTiers(details).map((tier) => ({
@@ -158,6 +174,7 @@ export function PricingPlanDialog({ mode, plan, currency, open, onOpenChange }: 
       name: values.name.trim(),
       plan_type: values.plan_type,
       minimum_charge: String(values.minimum_charge),
+      night_rate_per_hour: String(values.night_rate_per_hour),
       rate_details: buildRateDetails(values),
     };
 
@@ -178,6 +195,7 @@ export function PricingPlanDialog({ mode, plan, currency, open, onOpenChange }: 
 
   const submitting = creating || updating;
   const typeHint = PLAN_TYPES.find((p) => p.value === planType)?.hint;
+  const nightOff = nightConfig ? !nightConfig.night_pricing_enabled : false;
 
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!submitting || next) onOpenChange(next); }}>
@@ -310,15 +328,37 @@ export function PricingPlanDialog({ mode, plan, currency, open, onOpenChange }: 
               </div>
             )}
 
-            <div className="flex flex-col gap-1.5 sm:max-w-[50%]">
-              <label className={labelClassName}>Minimum charge ({currency})</label>
-              <Input type="number" step="0.01" min="0" {...register('minimum_charge')} />
-              {errors.minimum_charge && (
-                <p className="text-[11px] text-destructive">{errors.minimum_charge.message}</p>
-              )}
-              <p className="text-[11.5px] text-muted-foreground">
-                Floor applied once a session is chargeable at all. Leave at 0 for no minimum.
-              </p>
+            <div className="flex flex-col gap-4 sm:grid sm:grid-cols-2 sm:gap-3.5">
+              <div className="flex flex-col gap-1.5">
+                <label className={labelClassName}>Night rate per hour ({currency})</label>
+                <Input type="number" step="0.01" min="0" {...register('night_rate_per_hour')} />
+                {errors.night_rate_per_hour && (
+                  <p className="text-[11px] text-destructive">{errors.night_rate_per_hour.message}</p>
+                )}
+                <p className="text-[11.5px] text-muted-foreground">
+                  Charged for time inside the night window
+                  {nightConfig && !nightOff ? ` (${nightWindowLabel(nightConfig)})` : ''}, for
+                  everyone, tenants and monthly passes included. Leave at 0 to bill night time like
+                  day time.
+                </p>
+                {nightOff && (
+                  <p className="text-[11.5px] text-amber-600 dark:text-amber-400">
+                    Night pricing is switched off, so this rate is saved but not charged until it's
+                    turned back on.
+                  </p>
+                )}
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label className={labelClassName}>Minimum charge ({currency})</label>
+                <Input type="number" step="0.01" min="0" {...register('minimum_charge')} />
+                {errors.minimum_charge && (
+                  <p className="text-[11px] text-destructive">{errors.minimum_charge.message}</p>
+                )}
+                <p className="text-[11.5px] text-muted-foreground">
+                  Floor applied once a session is chargeable at all. Leave at 0 for no minimum.
+                </p>
+              </div>
             </div>
           </div>
 

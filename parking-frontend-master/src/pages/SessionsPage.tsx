@@ -218,6 +218,13 @@ const SessionsPage = () => {
     setTab((current) => (current === next ? current : next));
   }, [searchParams]);
 
+  // ?search= comes from the global search palette; only overwrite the box
+  // when the URL actually carries a term so sidebar links keep what's typed.
+  useEffect(() => {
+    const fromUrl = searchParams.get('search');
+    if (fromUrl !== null) setSearch(fromUrl);
+  }, [searchParams]);
+
   useEffect(() => {
     const fromUrl = searchParams.get('payment');
     const next = fromUrl === 'CASH' || fromUrl === 'ONLINE_PAYMENT' || fromUrl === 'UNPAID' ? fromUrl : 'ALL';

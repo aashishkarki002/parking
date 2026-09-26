@@ -16,6 +16,7 @@ import {
   UserGroupIcon,
   ChartBarIcon,
   ArrowRightStartOnRectangleIcon,
+  IdentificationIcon,
 } from '@heroicons/react/24/outline';
 import Cookies from 'js-cookie';
 import {
@@ -69,6 +70,7 @@ const topItem = { title: 'Dashboard', url: '/dashboard', icon: Squares2X2Icon };
 // Reports sits beside Dashboard rather than inside Billing: it spans sessions,
 // tenants, validation and revenue, so it is not owned by any one group.
 const reportsItem = { title: 'Reports', url: '/reports', icon: ChartBarIcon };
+const identifyCardItem = { title: 'Identify card', url: '/identify-card', icon: IdentificationIcon };
 
 type NavChild = { title: string; url: string; isActive: boolean; pill?: number };
 
@@ -408,6 +410,7 @@ export function AppSidebar() {
                   children={sessionChildren}
                 />
                 {canSeeBackOffice && renderItem(tenantsItem)}
+                {renderItem(identifyCardItem)}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>

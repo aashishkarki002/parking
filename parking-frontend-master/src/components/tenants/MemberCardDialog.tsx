@@ -1,11 +1,11 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import dayjs from 'dayjs';
-import { Bike, Car, CalendarClock, Copy, Eye, EyeOff, Pencil, Power, ReceiptText } from 'lucide-react';
+import { Motorbike, Car, CalendarClock, Copy, Eye, EyeOff, Nfc, Pencil, Plus, Power, ReceiptText } from 'lucide-react';
 import {
   useGetSessionsQuery,
-  useUpdateStaffMutation,
+  useUpdateRfidCardMutation,
 } from '@/app/(public)/(pages)/home/_redux/api';
 import { Button } from '@/components/ui/button';
 import {
@@ -20,11 +20,28 @@ import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 import { formatDate, formatDuration, formatTime } from '@/functions/dateFn';
+import useRfidReader from '@/hooks/common/useRfidReader';
+import { AddCardPanel } from '@/components/tenants/AddCardPanel';
 import { MemberEditForm } from '@/components/tenants/MemberEditForm';
-import type { TenantMember, TenantRow } from '@/components/tenants/types';
+import { StatusPill } from '@/components/tenants/primitives';
+import { UidDisplay } from '@/components/tenants/UidDisplay';
+import { pressCard, rejectCard } from '@/components/tenants/cardMotion';
+import { useAddCard } from '@/components/tenants/useAddCard';
+import type { RfidCard, TenantMember, TenantRow } from '@/components/tenants/types';
 
 const RECENT_VISITS = 5;
 const EDIT_FORM_ID = 'member-card-edit';
+const ADD_FORM_ID = 'member-card-add';
+// How long "Card added" stays up before the popup folds back to the card view.
+const ADDED_LINGER_MS = 1600;
+
+interface ActionTile {
+  label: string;
+  icon: typeof Pencil;
+  onClick: () => void;
+  disabled?: boolean;
+  tone?: 'danger' | 'primary';
+}
 
 interface MemberSession {
   id: string;
@@ -47,12 +64,14 @@ interface MemberCardDialogProps {
 
 const normalizePlate = (plate: string | null) => (plate ?? '').replace(/[\s-]/g, '').toUpperCase();
 
-const maskCode = (code?: string) => {
-  if (!code) return '•••• •••• ••••';
-  return `•••• •••• ${code.slice(-4)}`;
-};
+// Same length as the UID so nothing about it is lost but the digits themselves.
+const maskUid = (uid: string) => `${'•'.repeat(Math.max(0, uid.length - 4))}${uid.slice(-4)}`;
 
-const groupCode = (code?: string) => (code ? code.match(/.{1,4}/g)?.join(' ') ?? code : 'No card code');
+// The card the popup shows and acts on: the newest active one (the API returns
+// newest first), else the newest of any state, else none. A member can hold
+// several cards over time (lost/replaced).
+const pickCard = (cards: RfidCard[] | undefined): RfidCard | null =>
+  cards?.find((c) => c.is_active) ?? cards?.[0] ?? null;
 
 const relativeDay = (iso: string) => {
   const d = dayjs(iso);
@@ -74,18 +93,55 @@ const sessionLabel = (s: MemberSession) => {
   return Number(s.calculated_charge || 0) > 0 ? 'Unpaid' : 'Completed';
 };
 
-// Member detail as a centered "wallet card" popup: the parking card up top,
+// Member detail as a centered "wallet card" popup: the RFID gate card up top,
 // quick actions, the tenant's quota for this vehicle category, and the
-// member's most recent visits (matched on licence plate). Editing happens in
-// place: the card stays pinned on top and the form replaces the sections below.
+// member's most recent visits (matched on licence plate). Editing and adding a
+// card happen in place: the card stays pinned on top and the form replaces the
+// sections below. A card is added by tapping it on the booth reader (the card
+// face animates the tap) or by typing its number.
 export function MemberCardDialog({ member, row, open, onOpenChange, onChanged }: MemberCardDialogProps) {
   const navigate = useNavigate();
   const [revealed, setRevealed] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [adding, setAdding] = useState(false);
+  // The capture whose number has been shown once already, so hiding and
+  // re-showing it doesn't replay the roll.
+  const [settledCapture, setSettledCapture] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
+  const faceRef = useRef<HTMLDivElement>(null);
   const handleSubmittingChange = useCallback((value: boolean) => setSaving(value), []);
   const { data: sessionsData, isLoading: sessionsLoading } = useGetSessionsQuery(undefined, { skip: !open });
-  const [updateStaff, { isLoading: toggling }] = useUpdateStaffMutation();
+  const [updateRfidCard, { isLoading: toggling }] = useUpdateRfidCardMutation();
+  const { phase, capture, error, refusals, submit, reset } = useAddCard(member?.id, () => {
+    // Keep the number in view once it is on the card: it was just entered.
+    setRevealed(true);
+    onChanged();
+  });
+
+  // The reader is a keyboard wedge, so it is only listened to while the add
+  // screen is open and free to take a card — anywhere else its keystrokes
+  // must stay ordinary typing.
+  useRfidReader(
+    (uid) => {
+      void submit(uid, 'tap');
+    },
+    open && adding && (phase === 'listening' || phase === 'error')
+  );
+
+  const tapId = capture?.source === 'tap' ? capture.id : null;
+  useEffect(() => {
+    if (tapId !== null) pressCard(faceRef.current);
+  }, [tapId]);
+
+  useEffect(() => {
+    if (refusals > 0) rejectCard(faceRef.current);
+  }, [refusals]);
+
+  useEffect(() => {
+    if (phase !== 'added') return undefined;
+    const timer = setTimeout(() => setAdding(false), ADDED_LINGER_MS);
+    return () => clearTimeout(timer);
+  }, [phase]);
 
   const visits = useMemo(() => {
     if (!member) return [];
@@ -98,8 +154,26 @@ export function MemberCardDialog({ member, row, open, onOpenChange, onChanged }:
 
   if (!member) return null;
 
+  const cards = member.rfid_cards ?? [];
+  const card = pickCard(cards);
+  const cardActive = card?.is_active ?? false;
+  const otherCards = cards.filter((c) => c.id !== card?.id);
+  const cardLabel = adding
+    ? 'Tenant card · New RFID card'
+    : ['Tenant card', !card ? 'No RFID card' : !card.is_active ? 'Inactive' : null, cards.length > 1 ? `${cards.length} issued` : null]
+        .filter(Boolean)
+        .join(' · ');
+
+  // While adding, the face shows the card being read; otherwise the member's
+  // current card. The digits roll in only for a tap, and that same element is
+  // kept once the add screen closes so a finished roll is never replayed.
+  const shownUid = adding && capture ? capture.uid : (card?.uid ?? null);
+  const digitsVisible = revealed || (adding && capture !== null);
+  const rolledId = capture?.source === 'tap' && capture.uid === shownUid ? capture.id : null;
+  const rolling = rolledId !== null && rolledId !== settledCapture;
+
   const isBike = member.category === 'BIKE';
-  const VehicleIcon = isBike ? Bike : Car;
+  const VehicleIcon = isBike ? Motorbike : Car;
   const used = isBike ? row.bikesUsed : row.carsUsed;
   const quota = isBike ? row.bikeQuota : row.carQuota;
   const ratio = quota > 0 ? Math.min(1, used / quota) : 0;
@@ -109,45 +183,67 @@ export function MemberCardDialog({ member, row, open, onOpenChange, onChanged }:
     if (!next) {
       setRevealed(false);
       setEditing(false);
+      setAdding(false);
+      setSettledCapture(null);
+      reset();
     }
     onOpenChange(next);
   };
 
-  const copyCode = async () => {
-    if (!member.card_code) {
-      toast.info('This member has no card code yet');
+  const startAdding = () => {
+    reset();
+    setSettledCapture(null);
+    setAdding(true);
+  };
+
+  const cancelAdding = () => {
+    setAdding(false);
+    reset();
+  };
+
+  const copyUid = async () => {
+    if (!card) {
+      toast.info('This member has no RFID card yet');
       return;
     }
     try {
-      await navigator.clipboard.writeText(member.card_code);
-      toast.success('Card code copied');
+      await navigator.clipboard.writeText(card.uid);
+      toast.success('Card UID copied');
     } catch {
       toast.error('Could not copy to clipboard');
     }
   };
 
-  const toggleCard = async () => {
+  // The gate only admits RFIDCard.is_active, so this flips the card itself —
+  // not Staff.is_card_active, which the RFID tap never reads.
+  const toggleCard = async (target: RfidCard) => {
     try {
-      await updateStaff({ id: member.id, is_card_active: !member.is_card_active }).unwrap();
-      toast.success(member.is_card_active ? 'Card deactivated' : 'Card reactivated');
+      await updateRfidCard({ id: target.id, is_active: !target.is_active }).unwrap();
+      toast.success(target.is_active ? 'Card deactivated' : 'Card reactivated');
       onChanged();
     } catch {
       // interceptor handles the error toast
     }
   };
 
-  const actions = [
-    { label: 'Edit', icon: Pencil, onClick: () => setEditing(true) },
-    {
-      label: member.is_card_active ? 'Deactivate' : 'Activate',
-      icon: Power,
-      onClick: toggleCard,
-      disabled: toggling,
-      tone: member.is_card_active ? 'danger' : 'default',
-    },
-    { label: 'Copy code', icon: Copy, onClick: copyCode },
-    { label: 'Passes', icon: CalendarClock, onClick: () => navigate('/subscription') },
-  ] as const;
+  const edit: ActionTile = { label: 'Edit', icon: Pencil, onClick: () => setEditing(true) };
+  const passes: ActionTile = { label: 'Passes', icon: CalendarClock, onClick: () => navigate('/subscription') };
+  // Without a card, the one thing worth doing is adding it, so it takes the
+  // place of the card-only actions instead of leaving them greyed out.
+  const actions: ActionTile[] = card
+    ? [
+        edit,
+        {
+          label: cardActive ? 'Deactivate' : 'Activate',
+          icon: Power,
+          onClick: () => void toggleCard(card),
+          disabled: toggling,
+          tone: cardActive ? 'danger' : undefined,
+        },
+        { label: 'Copy UID', icon: Copy, onClick: copyUid },
+        passes,
+      ]
+    : [edit, { label: 'Add card', icon: Nfc, onClick: startAdding, tone: 'primary' }, passes];
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -158,7 +254,7 @@ export function MemberCardDialog({ member, row, open, onOpenChange, onChanged }:
         className="max-h-[calc(100dvh-1.5rem)] max-w-md overflow-hidden bg-background sm:max-h-[calc(100dvh-3rem)]"
       >
         <DialogHeader className="shrink-0 border-0 px-4 pb-2 sm:px-5">
-          <DialogTitle>{editing ? 'Edit vehicle' : 'Parking card'}</DialogTitle>
+          <DialogTitle>{editing ? 'Edit vehicle' : adding ? 'Add RFID card' : 'Parking card'}</DialogTitle>
           <DialogDescription>{row.name}</DialogDescription>
         </DialogHeader>
 
@@ -167,27 +263,50 @@ export function MemberCardDialog({ member, row, open, onOpenChange, onChanged }:
           <div className="relative pt-2">
             <div className="absolute inset-x-3 top-0 h-8 rounded-t-xl bg-primary/35 dark:bg-primary/25" />
             <div
+              ref={faceRef}
               className={cn(
                 'relative overflow-hidden rounded-xl bg-primary p-4 text-white sm:p-5 shadow-lg dark:bg-accent dark:ring-1 dark:ring-primary/40',
-                !member.is_card_active && 'grayscale-[0.7]'
+                !cardActive && !adding && 'grayscale-[0.7]'
               )}
             >
               <div className="pointer-events-none absolute inset-0 bg-linear-to-br from-white/15 via-transparent to-black/35" />
               <div className="pointer-events-none absolute -top-16 -right-12 h-40 w-40 rounded-full bg-white/10" />
+              {/* Rings radiating out of the tap. Re-keyed per tap; stays mounted
+                  (invisible) afterwards so closing the add screen can't replay it. */}
+              {tapId !== null && (
+                <div key={tapId} aria-hidden className="pointer-events-none absolute inset-0">
+                  <span className="tap-ring" />
+                  <span className="tap-ring" />
+                </div>
+              )}
 
               <div className="relative flex flex-col gap-3 sm:gap-4">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-white/75">
-                    {member.is_card_active ? 'Tenant card' : 'Tenant card · Inactive'}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setRevealed((v) => !v)}
-                    aria-label={revealed ? 'Hide card code' : 'Show card code'}
-                    className="flex h-7 w-7 items-center justify-center rounded-md bg-white/15 text-white/90 hover:bg-white/25"
-                  >
-                    {revealed ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                  </button>
+                  <span className="text-xs font-medium text-white/75">{cardLabel}</span>
+                  {!adding && !editing && card && (
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={startAdding}
+                        aria-label="Add another RFID card"
+                        title="Add another RFID card"
+                        className="flex h-7 w-7 items-center justify-center rounded-md bg-white/15 text-white/90 hover:bg-white/25"
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRevealed((v) => !v);
+                          if (rolledId !== null) setSettledCapture(rolledId);
+                        }}
+                        aria-label={revealed ? 'Hide card UID' : 'Show card UID'}
+                        className="flex h-7 w-7 items-center justify-center rounded-md bg-white/15 text-white/90 hover:bg-white/25"
+                      >
+                        {revealed ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -195,9 +314,23 @@ export function MemberCardDialog({ member, row, open, onOpenChange, onChanged }:
                   <p className="text-[22px] leading-tight font-bold tracking-tight tabular-nums sm:text-[28px]">
                     {member.active_pass_until ? formatDate(member.active_pass_until) : 'No monthly pass'}
                   </p>
-                  <p className="mt-1 font-mono text-[13px] tracking-widest break-all text-white/80 tabular-nums sm:text-sm">
-                    {revealed ? groupCode(member.card_code) : maskCode(member.card_code)}
-                  </p>
+                  {shownUid ? (
+                    // Shown exactly as the reader types it: leading zeros matter.
+                    <p className="mt-1 font-mono text-[13px] text-white/80 tabular-nums sm:text-sm">
+                      <UidDisplay
+                        key={digitsVisible ? `uid-${rolling ? rolledId : 'still'}` : 'masked'}
+                        text={digitsVisible ? shownUid : maskUid(shownUid)}
+                        roll={digitsVisible && rolling}
+                      />
+                    </p>
+                  ) : adding ? (
+                    // Waiting for a tap: blank cells, breathing.
+                    <p className="mt-1 font-mono text-[13px] text-white/60 sm:text-sm motion-safe:animate-pulse">
+                      <UidDisplay text={'•'.repeat(10)} />
+                    </p>
+                  ) : (
+                    <p className="mt-1 text-[13px] text-white/80 sm:text-sm">No RFID card issued</p>
+                  )}
                 </div>
 
                 <div className="flex items-end justify-between gap-3">
@@ -229,30 +362,66 @@ export function MemberCardDialog({ member, row, open, onOpenChange, onChanged }:
                 onChanged();
               }}
             />
+          ) : adding ? (
+            <AddCardPanel
+              formId={ADD_FORM_ID}
+              phase={phase}
+              error={error}
+              onSubmit={(uid) => void submit(uid, 'manual')}
+            />
           ) : (
             <>
-              <div className="grid grid-cols-4 gap-1.5 sm:gap-2">
-                {actions.map(({ label, icon: Icon, onClick, ...rest }) => (
+              <div className={cn('grid gap-1.5 sm:gap-2', actions.length === 3 ? 'grid-cols-3' : 'grid-cols-4')}>
+                {actions.map(({ label, icon: Icon, onClick, disabled, tone }) => (
                   <button
                     key={label}
                     type="button"
                     onClick={onClick}
-                    disabled={'disabled' in rest ? rest.disabled : false}
+                    disabled={disabled}
                     className={cn(
                       'flex min-w-0 flex-col items-center gap-1.5 rounded-xl border border-border bg-card px-1 py-2.5 text-center text-[11px] leading-tight font-medium break-words sm:gap-2 sm:py-3 sm:text-xs text-foreground transition-colors hover:border-primary/40 hover:bg-accent disabled:opacity-50',
-                      'tone' in rest && rest.tone === 'danger' && 'hover:border-red-300 hover:bg-red-50 dark:hover:border-red-900 dark:hover:bg-red-950/30'
+                      tone === 'danger' && 'hover:border-red-300 hover:bg-red-50 dark:hover:border-red-900 dark:hover:bg-red-950/30',
+                      tone === 'primary' && 'border-primary/40 bg-accent'
                     )}
                   >
                     <Icon
                       className={cn(
                         'h-4.5 w-4.5 shrink-0 text-primary sm:h-5 sm:w-5',
-                        'tone' in rest && rest.tone === 'danger' && 'text-red-600 dark:text-red-400'
+                        tone === 'danger' && 'text-red-600 dark:text-red-400'
                       )}
                     />
                     {label}
                   </button>
                 ))}
               </div>
+
+              {otherCards.length > 0 && (
+                <div>
+                  <span className="mb-1 block text-sm text-muted-foreground">Other cards</span>
+                  <ul>
+                    {otherCards.map((c, i) => (
+                      <li key={c.id}>
+                        {i > 0 && <Separator />}
+                        <div className="flex items-center gap-3 py-2">
+                          <div className="min-w-0 flex-1">
+                            <p className="font-mono text-sm font-semibold tabular-nums text-foreground">{maskUid(c.uid)}</p>
+                            <p className="text-xs text-muted-foreground">Added {formatDate(c.created_at, 'DD MMM')}</p>
+                          </div>
+                          <StatusPill active={c.is_active} />
+                          <button
+                            type="button"
+                            onClick={() => void toggleCard(c)}
+                            disabled={toggling}
+                            className="shrink-0 text-xs font-semibold text-muted-foreground hover:text-primary disabled:opacity-50"
+                          >
+                            {c.is_active ? 'Deactivate' : 'Activate'}
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
               <div className="rounded-xl border border-border bg-card p-3.5 sm:p-4">
                 <div className="flex items-baseline justify-between gap-3">
@@ -347,6 +516,25 @@ export function MemberCardDialog({ member, row, open, onOpenChange, onChanged }:
             </>
           )}
         </div>
+
+        {adding && (
+          <DialogFooter className="shrink-0 justify-end">
+            {phase === 'added' ? (
+              <Button type="button" onClick={() => setAdding(false)}>
+                Done
+              </Button>
+            ) : (
+              <>
+                <Button type="button" variant="outline" onClick={cancelAdding} disabled={phase === 'saving'}>
+                  Cancel
+                </Button>
+                <Button type="submit" form={ADD_FORM_ID} disabled={phase === 'saving'}>
+                  {phase === 'saving' ? 'Adding…' : 'Add card'}
+                </Button>
+              </>
+            )}
+          </DialogFooter>
+        )}
 
         {editing && (
           <DialogFooter className="shrink-0 justify-end">

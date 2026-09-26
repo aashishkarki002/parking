@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Plus } from 'lucide-react';
 import {
@@ -186,6 +186,20 @@ const TenantsPage = () => {
   const viewMember = (member: TenantMember) => {
     setViewMemberId(member.id);
   };
+
+  // ?member=<staff id> comes from the global search palette: open that
+  // member's card once (adjusting state during render, not in an effect),
+  // then drop the param so closing the card sticks.
+  const memberParam = searchParams.get('member');
+  const [handledMemberParam, setHandledMemberParam] = useState<string | null>(null);
+  if (memberParam !== handledMemberParam) {
+    setHandledMemberParam(memberParam);
+    const id = Number(memberParam);
+    if (memberParam && Number.isFinite(id)) setViewMemberId(id);
+  }
+  useEffect(() => {
+    if (memberParam && selectedKey) setSearchParams({ tenant: selectedKey }, { replace: true });
+  }, [memberParam, selectedKey, setSearchParams]);
 
 
   return (

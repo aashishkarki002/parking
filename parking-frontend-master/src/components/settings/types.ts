@@ -23,7 +23,31 @@ export interface PricingPlan {
   plan_type: PlanType;
   rate_details: RateDetails;
   minimum_charge: string;
+  // Hourly rate for time inside the night window (ParkingConfiguration
+  // night_start–night_end). "0.00" means night time is billed like day time.
+  night_rate_per_hour?: string;
 }
+
+// Night-window fields of the /parking/configuration/ singleton.
+export interface NightPricingConfig {
+  night_pricing_enabled: boolean;
+  night_start: string; // "HH:MM:SS"
+  night_end: string;
+}
+
+// "22:00:00" -> "10 PM", "06:30:00" -> "6:30 AM"
+export const formatClock = (value: string | undefined) => {
+  const [h, m] = (value ?? '00:00').split(':').map(Number);
+  const suffix = h < 12 ? 'AM' : 'PM';
+  const hour = h % 12 || 12;
+  return m ? `${hour}:${String(m).padStart(2, '0')} ${suffix}` : `${hour} ${suffix}`;
+};
+
+// "10 PM–6 AM"
+export const nightWindowLabel = (config: NightPricingConfig) =>
+  `${formatClock(config.night_start)}–${formatClock(config.night_end)}`;
+
+export const hasNightRate = (plan: PricingPlan) => Number(plan.night_rate_per_hour ?? 0) > 0;
 
 export type VehicleCategory = 'CAR' | 'BIKE';
 
@@ -113,6 +137,20 @@ export function rateSummary(plan: PricingPlan, currency: string): string {
       return `${from}–${tier.up_to_hours}h @ ${formatMoney(tier.rate, currency)}`;
     })
     .join(' · ');
+}
+
+// The night clause of a plan's rate, or null when night time bills like day
+// time — no night rate, or night pricing switched off. `config` is absent for
+// admins (the configuration endpoint is superadmin-only), in which case the
+// window is left out.
+export function nightRateSummary(
+  plan: PricingPlan,
+  currency: string,
+  config?: NightPricingConfig | null
+): string | null {
+  if (!hasNightRate(plan) || (config && !config.night_pricing_enabled)) return null;
+  const window = config ? ` (${nightWindowLabel(config)})` : '';
+  return `Night ${formatMoney(plan.night_rate_per_hour, currency)} / hour${window}`;
 }
 
 // Flags a plan the backend would silently charge 0 for, so an operator can see

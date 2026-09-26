@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { AppSidebar } from '@/components/app-sidebar';
+import { GlobalSearch } from '@/components/GlobalSearch';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 
 interface PageShellProps {
@@ -22,9 +23,10 @@ export function PageShell({ title, actions, children }: PageShellProps) {
             <h1 className="text-lg font-semibold text-foreground sm:text-xl">{title}</h1>
           </div>
 
-          {actions && (
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">{actions}</div>
-          )}
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+            <GlobalSearch />
+            {actions}
+          </div>
         </div>
 
         <div className="px-4 py-4 sm:px-6 sm:py-6">{children}</div>

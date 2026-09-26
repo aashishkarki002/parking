@@ -120,6 +120,7 @@ interface RfidTapResponse {
   company?: string | null;
   license_plate?: string;
   session_id?: string;
+  ticket_number?: string;
   entry_time?: string;
   exit_time?: string;
   duration_minutes?: number | null;
@@ -315,6 +316,10 @@ const Options = () => {
         return;
       }
       setRfidResult(toRfidResult(uid, res));
+      if (res.status === 'exit' && Number(res.calculated_charge ?? 0) > 0 && res.ticket_number) {
+        const session = await triggerGetSessionByTicket(res.ticket_number).unwrap();
+        openTenantOverageBill(session);
+      }
     } catch (err) {
       setRfidResult(rfidErrorResult(uid, err));
     }
@@ -330,6 +335,10 @@ const Options = () => {
         session_id: rfidResult.sessionId,
       }).unwrap();
       setRfidResult(toRfidResult(rfidResult.uid, res));
+      // The exit was wrong, so its charge is void — drop its unpaid bill.
+      if (billData && !billGenerated && String(billData.id) === rfidResult.sessionId) {
+        setBillData(null);
+      }
       toast.success('Corrected — recorded as an entry. The earlier session is excluded from reports.');
     } catch (err) {
       setRfidResult(rfidErrorResult(rfidResult.uid, err));
@@ -412,7 +421,9 @@ const Options = () => {
       const res = await confirmTenantCard({
         card_code: pendingCardScan.cardCode,
       }).unwrap();
-      if (res?.session) {
+      if (res?.action === 'exit' && Number(res.session?.calculated_charge ?? 0) > 0) {
+        openTenantOverageBill(res.session);
+      } else if (res?.session) {
         setParkingPassData({
           action: res.action,
           ticketNo: res.session.ticket_number,
@@ -497,6 +508,46 @@ const Options = () => {
     }
   };
 
+  // Maps a ParkingSessionSerializer payload onto the bill panel's state.
+  // Shared by ticket scans and charged tenant exits (RFID / tenant card),
+  // so an over-allowance tenant gets the exact same bill as a visitor.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sessionToBillData = (res: any, fallbackVehicleNo = '') => ({
+    id: res.id,
+    ticketNo: res.ticket_number,
+    vehicleNo: res.license_plate || fallbackVehicleNo,
+    name: res.name || '',
+    phone: res.phone || '',
+    type: res.vehicle_type === (bikeVehicleType?.name ?? '2Wheeler') ? '2W' : '4W',
+    // backend returns strings like "60.00" – coerce to number
+    charge: Number(res.calculated_charge ?? 0),
+    createdAt: res.entry_time,
+    endAt: res.exit_time,
+    isActive: res.is_active,
+    paymentMethod: res.payment_method,
+    status: res.status,
+    registeredStaffMember: res.registered_staff_member || null,
+    stamps: res.stamps || [],
+    tenantBill: res.tenant_bill || null,
+  });
+
+  // A tenant / monthly parker who went past the free allowance owes money
+  // like any visitor: open the regular bill (coupon, Cash/Online, receipt)
+  // in place of whatever the panel was showing.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const openTenantOverageBill = (session: any) => {
+    setBikeData(null);
+    setCarData(null);
+    setParkingPassData(null);
+    setPendingCardScan(null);
+    setStampSession(null);
+    setStampVendorId(null);
+    setCouponCode('');
+    setProceedToGenerateBill(false);
+    setBillGenerated(false);
+    setBillData(sessionToBillData(session));
+  };
+
   const submitBillScan = async () => {
     const scannedTicket = inputRef.current?.value?.trim() ?? '';
     if (!beginScanSubmit(scannedTicket)) return;
@@ -518,24 +569,7 @@ const Options = () => {
       }).unwrap();
 
       if (res) {
-        const respData = {
-          id: res.id,
-          ticketNo: res.ticket_number,
-          vehicleNo: res.license_plate || bikeData?.vehicleNo || carData?.vehicleNo || '',
-          name: res.name || '',
-          phone: res.phone || '',
-          type: res.vehicle_type === (bikeVehicleType?.name ?? '2Wheeler') ? '2W' : '4W',
-          // backend returns strings like "60.00" – coerce to number
-          charge: Number(res.calculated_charge ?? 0),
-          createdAt: res.entry_time,
-          endAt: res.exit_time,
-          isActive: res.is_active,
-          paymentMethod: res.payment_method,
-          status: res.status,
-          registeredStaffMember: res.registered_staff_member || null,
-          stamps: res.stamps || [],
-          tenantBill: res.tenant_bill || null,
-        };
+        const respData = sessionToBillData(res, bikeData?.vehicleNo || carData?.vehicleNo || '');
         setBillData(respData);
         setBikeData(null);
         setCarData(null);
@@ -1653,6 +1687,19 @@ const Options = () => {
                         </Typography>
                         <Typography variant="caption">{billData.ticketNo}</Typography>
                       </Box>
+
+                      {billData.registeredStaffMember && (
+                        <Box
+                          sx={{ display: 'flex', justifyContent: 'space-between', marginBottom: 1 }}
+                        >
+                          <Typography variant="caption" sx={{ fontWeight: 'bold', color: '#555' }}>
+                            Tenant:
+                          </Typography>
+                          <Typography variant="caption">
+                            {billData.registeredStaffMember} · over free allowance
+                          </Typography>
+                        </Box>
+                      )}
 
                       <Box
                         sx={{

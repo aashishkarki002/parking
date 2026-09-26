@@ -19,6 +19,15 @@ export interface Vendor {
   sync_source: string | null;
 }
 
+// A member's RFID gate card (RFIDCard on the backend). `uid` is what the booth
+// reader types on a tap; leading zeros are significant.
+export interface RfidCard {
+  id: number;
+  uid: string;
+  is_active: boolean;
+  created_at: string;
+}
+
 export interface StaffMember {
   id: number;
   name: string;
@@ -27,6 +36,8 @@ export interface StaffMember {
   vehicle_type: string | null;
   is_card_active: boolean;
   card_code?: string;
+  // Newest first. Empty until a card is issued from the admin.
+  rfid_cards?: RfidCard[];
 }
 
 export type VehicleCategory = 'CAR' | 'BIKE';
