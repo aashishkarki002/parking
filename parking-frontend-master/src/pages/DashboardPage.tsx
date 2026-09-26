@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   ArrowDown,
   ArrowUp,
-  LayoutGrid,
+  ChevronDown,
   Plus,
 } from 'lucide-react';
 import { useGetSessionsQuery } from '@/app/(public)/(pages)/home/_redux/api';
@@ -14,11 +14,12 @@ import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/s
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { cn } from '@/lib/utils';
 import { RevenueMixChart, RevenueMixChartSkeleton } from '@/components/dashboard/RevenueMixChart';
 import { MixCard, MixCardSkeleton } from '@/components/dashboard/MixCard';
-import { DARK_MIX_PALETTE, LIGHT_MIX_PALETTE, type MixSegment } from '@/components/dashboard/mix-types';
+import { MIX_PALETTE, type MixSegment } from '@/components/dashboard/mix-types';
+import { PeriodScopeBar } from '@/components/dashboard/PeriodScopeBar';
+import { inRange, planBuckets, resolveScope, type Scope } from '@/components/dashboard/scope';
 import {
   Pagination,
   PaginationContent,
@@ -54,61 +55,7 @@ interface ParkingSession {
   payment_method: string | null;
 }
 
-type Period = 'today' | 'week' | 'month';
 
-const PERIODS: { key: Period; label: string; noun: string }[] = [
-
-  { key: 'week', label: 'This week', noun: 'week' },
-  { key: 'today', label: 'Today', noun: 'day' },
-  { key: 'month', label: 'This month', noun: 'month' },
-];
-
-// `offset` of 0 is the current period, -1 is the immediately preceding one
-// (used to compute the "previous week" comparison shown on each stat card).
-const getPeriodRange = (period: Period, offset: number): [Date, Date] => {
-  const now = new Date();
-
-  if (period === 'today') {
-    const start = new Date(now);
-    start.setHours(0, 0, 0, 0);
-    start.setDate(start.getDate() + offset);
-    const end = new Date(start);
-    end.setDate(end.getDate() + 1);
-    return [start, end];
-  }
-
-  if (period === 'week') {
-    const day = now.getDay();
-    const diffToMonday = (day === 0 ? -6 : 1) - day;
-    const start = new Date(now);
-    start.setHours(0, 0, 0, 0);
-    start.setDate(start.getDate() + diffToMonday + offset * 7);
-    const end = new Date(start);
-    end.setDate(end.getDate() + 7);
-    return [start, end];
-  }
-
-  const start = new Date(now.getFullYear(), now.getMonth() + offset, 1);
-  const end = new Date(now.getFullYear(), now.getMonth() + offset + 1, 1);
-  return [start, end];
-};
-
-const inRange = (iso: string, start: Date, end: Date) => {
-  const t = new Date(iso).getTime();
-  return t >= start.getTime() && t < end.getTime();
-};
-
-// Sunday-start calendar week, independent of the Today/Week/Month tabs above —
-// the revenue mix chart always compares "this calendar week vs last calendar week".
-const getSundayWeekStart = (offset: number): Date => {
-  const now = new Date();
-  const start = new Date(now);
-  start.setHours(0, 0, 0, 0);
-  start.setDate(start.getDate() - now.getDay() + offset * 7);
-  return start;
-};
-
-const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const SESSIONS_PAGE_SIZE = 10;
 
 const humanizeLabel = (raw: string) =>
@@ -213,7 +160,7 @@ function KpiCell({
 
 const DashboardPage = () => {
   const navigate = useNavigate();
-  const [period, setPeriod] = useState<Period>('today');
+  const [scope, setScope] = useState<Scope>({ kind: 'preset', key: 'today' });
 
   const [theme] = useState<Theme>(
     () => (localStorage.getItem(THEME_STORAGE_KEY) as Theme | null) ?? 'light'
@@ -230,11 +177,17 @@ const DashboardPage = () => {
   const [page, setPage] = useState(1);
 
 
+  // Everything about "what window am I looking at, and against what" is decided
+  // in one place, so the figures, the chart copy and the scope bar can't drift.
+  const resolved = useMemo(() => resolveScope(scope), [scope]);
+  const buckets = useMemo(() => planBuckets(resolved.start, resolved.end), [resolved]);
+
   const stats = useMemo(() => {
-    const [curStart, curEnd] = getPeriodRange(period, 0);
-    const [prevStart, prevEnd] = getPeriodRange(period, -1);
+    const { start: curStart, end: curEnd, cursor, prevStart, prevEnd } = resolved;
 
     const curSessions = sessions.filter((s) => inRange(s.entry_time, curStart, curEnd));
+    // Baseline is truncated to the same elapsed span (see scope.ts) — otherwise
+    // a partial month always loses to a whole one and every delta reads red.
     const prevSessions = sessions.filter((s) => inRange(s.entry_time, prevStart, prevEnd));
 
     const currentRevenue = sumCharge(curSessions);
@@ -243,7 +196,7 @@ const DashboardPage = () => {
     const carsParked = curSessions.length;
     const carsParkedPrev = prevSessions.length;
 
-    const elapsedMs = Math.min(Date.now(), curEnd.getTime()) - curStart.getTime();
+    const elapsedMs = cursor.getTime() - curStart.getTime();
     const totalMs = curEnd.getTime() - curStart.getTime();
     const elapsedFraction = totalMs > 0 ? Math.min(Math.max(elapsedMs / totalMs, 0.01), 1) : 1;
     const predictedRevenue = currentRevenue / elapsedFraction;
@@ -265,47 +218,47 @@ const DashboardPage = () => {
       digitalRevenuePrev,
       digitalRevenueChange: pctChange(digitalRevenue, digitalRevenuePrev),
     };
-  }, [sessions, period]);
+  }, [sessions, resolved]);
   const statusOptions = useMemo(() => {
     const set = new Set(sessions.map((s) => s.status));
     return Array.from(set);
   }, [sessions]);
 
-  const periodNoun = PERIODS.find((p) => p.key === period)!.noun;
-  const periodLabelLower = PERIODS.find((p) => p.key === period)!.label.toLowerCase();
 
-  // Cash vs. digital revenue per weekday of the current calendar week, plus
-  // the current week's digital-payment share vs. last week's — the two
-  // series stack to each day's total, so a stacked bar is meaningful here
-  // (unlike a this-week-vs-last-week comparison, which doesn't stack).
+  // Cash vs. digital revenue, bucketed at whatever granularity the resolved
+  // window calls for (see planBuckets), plus this window's digital-payment
+  // share against the baseline's. The two series stack to each bucket's total,
+  // so a stacked bar is meaningful here.
   const revenueMix = useMemo(() => {
-    const curStart = getSundayWeekStart(0);
-    const prevStart = getSundayWeekStart(-1);
-    const cash = new Array(7).fill(0);
-    const digital = new Array(7).fill(0);
+    const { labels, indexOf } = buckets;
+    const { start: curStart, end: curEnd, prevStart, prevEnd } = resolved;
+    const cash = new Array(labels.length).fill(0);
+    const digital = new Array(labels.length).fill(0);
     let prevCash = 0;
     let prevDigital = 0;
 
     for (const s of sessions) {
       const charge = Number(s.calculated_charge) || 0;
       if (charge === 0) continue;
-      const t = new Date(s.entry_time).getTime();
+      const entry = new Date(s.entry_time);
+      const t = entry.getTime();
       const digitalPayment = isDigitalPayment(s);
 
-      const curOffset = Math.floor((t - curStart.getTime()) / 86_400_000);
-      if (curOffset >= 0 && curOffset < 7) {
-        if (digitalPayment) digital[curOffset] += charge;
-        else cash[curOffset] += charge;
+      if (t >= curStart.getTime() && t < curEnd.getTime()) {
+        const idx = indexOf(entry);
+        if (idx >= 0 && idx < labels.length) {
+          if (digitalPayment) digital[idx] += charge;
+          else cash[idx] += charge;
+        }
       }
 
-      const prevOffset = Math.floor((t - prevStart.getTime()) / 86_400_000);
-      if (prevOffset >= 0 && prevOffset < 7) {
+      if (t >= prevStart.getTime() && t < prevEnd.getTime()) {
         if (digitalPayment) prevDigital += charge;
         else prevCash += charge;
       }
     }
 
-    const data = WEEKDAY_LABELS.map((day, i) => ({ day, cash: cash[i], digital: digital[i] }));
+    const data = labels.map((label, i) => ({ label, cash: cash[i], digital: digital[i] }));
     const totalCash = cash.reduce((sum, v) => sum + v, 0);
     const totalDigital = digital.reduce((sum, v) => sum + v, 0);
     const total = totalCash + totalDigital;
@@ -314,11 +267,11 @@ const DashboardPage = () => {
     const prevDigitalSharePct = prevTotal > 0 ? (prevDigital / prevTotal) * 100 : 0;
 
     return { data, total, digitalSharePct, digitalShareDeltaPts: digitalSharePct - prevDigitalSharePct };
-  }, [sessions]);
+  }, [sessions, resolved, buckets]);
 
   const mix = useMemo(() => {
     const list = stats.curSessions;
-    const palette = theme === 'dark' ? DARK_MIX_PALETTE : LIGHT_MIX_PALETTE;
+    const palette = MIX_PALETTE;
     return {
       vehicle: buildMixSegments(list, (s) => s.vehicle_type || 'Unknown', palette, 3),
       payment: buildMixSegments(
@@ -329,7 +282,7 @@ const DashboardPage = () => {
       ),
       status: buildMixSegments(list, (s) => humanizeLabel(s.status), palette, 4),
     };
-  }, [stats.curSessions, theme]);
+  }, [stats.curSessions]);
   const filteredSessions = useMemo(() => {
     if (statusFilter === 'all') return sessions;
     return sessions.filter((s) => s.status === statusFilter);
@@ -341,6 +294,8 @@ const DashboardPage = () => {
   useEffect(() => {
     setPage((p) => Math.min(p, totalPages));
   }, [totalPages]);
+  const scopeKey = scope.kind === 'preset' ? scope.key : `${scope.start}_${scope.end}`;
+
   const getPageNumbers = (current: number, total: number): (number | 'ellipsis')[] => {
     if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
 
@@ -368,28 +323,6 @@ const DashboardPage = () => {
           </div>
 
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
-            <ToggleGroup
-              value={[period]}
-              onValueChange={(value) => {
-                const next = value[0] as Period | undefined;
-                if (next) setPeriod(next);
-              }}
-              className="overflow-x-auto"
-            >
-              {PERIODS.map((p) => (
-                <ToggleGroupItem
-                  key={p.key}
-                  value={p.key}
-                  className={cn(
-                    'whitespace-nowrap px-2 py-0.5 text-xs font-medium sm:px-2.5 sm:py-1',
-                    'text-muted-foreground hover:text-foreground',
-                    'data-[pressed]:bg-primary data-[pressed]:text-white dark:data-[pressed]:bg-teal-500 dark:data-[pressed]:text-zinc-950'
-                  )}
-                >
-                  {p.label}
-                </ToggleGroupItem>
-              ))}
-            </ToggleGroup>
             <Button
               size="lg"
               onClick={() => navigate('/')}
@@ -402,16 +335,9 @@ const DashboardPage = () => {
         </div>
 
         <div className="px-4 py-4 sm:px-6 sm:py-6 ">
-          <div className="mb-4 flex flex-wrap items-end justify-between gap-4">
-            <div>
-
-
-
-              <div className=" text-xs text-muted-foreground">
-                Live snapshot of permits, occupancy and revenue across{' '}
-                <b className="font-semibold text-foreground/90">Sallyan House</b>.
-              </div>
-            </div>
+          <div className="mb-4 text-xs text-muted-foreground">
+            Live snapshot of permits, occupancy and revenue across{' '}
+            <b className="font-semibold text-foreground/90">Sallyan House</b>.
           </div>
 
           {error ? (
@@ -420,6 +346,11 @@ const DashboardPage = () => {
             </div>
           ) : (
             <>
+              <PeriodScopeBar scope={scope} onScopeChange={setScope} resolved={resolved} />
+
+              {/* Keyed on the scope so a change cross-fades the figures in
+                  rather than hard-swapping them under the reader's eye. */}
+              <div key={scopeKey} className="scope-fade">
               <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border lg:grid-cols-4">
                 <KpiCell
                   label="Revenue"
@@ -428,8 +359,8 @@ const DashboardPage = () => {
                   delta={stats.revenueChange}
                   footer={
                     <>
-                      Last {periodNoun}{' '}
-                      <span className=" tabular-nums text-foreground/70">{formatNRs(stats.previousRevenue)}</span>
+                      Baseline{' '}
+                      <span className="tabular-nums text-foreground/70">{formatNRs(stats.previousRevenue)}</span>
                     </>
                   }
                 />
@@ -440,8 +371,8 @@ const DashboardPage = () => {
                   delta={stats.carsChange}
                   footer={
                     <>
-                      Last {periodNoun}{' '}
-                      <span className="font-mono tabular-nums text-foreground/70">{stats.carsParkedPrev}</span>
+                      Baseline{' '}
+                      <span className="tabular-nums text-foreground/70">{stats.carsParkedPrev}</span>
                     </>
                   }
                 />
@@ -452,8 +383,8 @@ const DashboardPage = () => {
                   delta={stats.predictedChange}
                   footer={
                     <>
-                      Last {periodNoun}{' '}
-                      <span className="font-mono tabular-nums text-foreground/70">{formatNRs(stats.previousRevenue)}</span>
+                      Baseline{' '}
+                      <span className="tabular-nums text-foreground/70">{formatNRs(stats.previousRevenue)}</span>
                     </>
                   }
                 />
@@ -464,8 +395,8 @@ const DashboardPage = () => {
                   delta={stats.digitalRevenueChange}
                   footer={
                     <>
-                      Last {periodNoun}{' '}
-                      <span className="font-mono tabular-nums text-foreground/70">{formatNRs(stats.digitalRevenuePrev)}</span>
+                      Baseline{' '}
+                      <span className="tabular-nums text-foreground/70">{formatNRs(stats.digitalRevenuePrev)}</span>
                     </>
                   }
                 />
@@ -473,7 +404,7 @@ const DashboardPage = () => {
 
               {loading ? (
                 <div className="mt-4">
-                  <RevenueMixChartSkeleton />
+                  <RevenueMixChartSkeleton bars={buckets.labels.length} />
                 </div>
               ) : (
                 <div className="mt-4">
@@ -482,6 +413,9 @@ const DashboardPage = () => {
                     total={revenueMix.total}
                     digitalSharePct={revenueMix.digitalSharePct}
                     digitalShareDeltaPts={revenueMix.digitalShareDeltaPts}
+                    scopeLabel={resolved.scopeLabel}
+                    comparisonLabel={resolved.comparisonLabel}
+                    bucketNoun={buckets.bucketNoun}
                   />
                 </div>
               )}
@@ -497,25 +431,44 @@ const DashboardPage = () => {
                   <>
                     <MixCard
                       title="Vehicle mix"
-                      subtitle={periodLabelLower}
+                      subtitle={resolved.scopeLabel}
                       segments={mix.vehicle}
                       centerLabel={String(stats.curSessions.length)}
                     />
-                    <MixCard title="Payment method" subtitle={periodLabelLower} segments={mix.payment} />
-                    <MixCard title="Session status" subtitle={periodLabelLower} segments={mix.status} />
+                    <MixCard title="Payment method" subtitle={resolved.scopeLabel} segments={mix.payment} />
+                    <MixCard title="Session status" subtitle={resolved.scopeLabel} segments={mix.status} />
                   </>
                 )}
+              </div>
               </div>
 
               <Card className="mt-4">
 
-                <CardHeader className="p-4 pb-2 sm:p-6 sm:pb-3 ">
-                  <CardTitle className="text-base font-semibold text-foreground">Recent sessions</CardTitle>
+                <CardHeader className="flex-col items-stretch gap-3 p-4 pb-2 sm:flex-row sm:items-center sm:gap-4 sm:p-6 sm:pb-3">
+                  <div className="min-w-0 flex-1">
+                    <CardTitle className="text-base font-semibold text-foreground">Recent sessions</CardTitle>
+                    {/* Says so out loud: this list is live and whole, and the
+                        range above has no say over it. */}
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      Every session on record — not limited to the selected range
+                    </p>
+                  </div>
                   <DropdownMenu>
-                    <DropdownMenuTrigger render={<Button variant="outline" />}>
-                      Status: {statusFilter === 'all' ? 'All' : humanizeLabel(statusFilter)}
+                    <DropdownMenuTrigger
+                      render={
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="w-full justify-between sm:w-auto sm:shrink-0 sm:justify-center"
+                        />
+                      }
+                    >
+                      <span className="min-w-0 truncate">
+                        Status: {statusFilter === 'all' ? 'All' : humanizeLabel(statusFilter)}
+                      </span>
+                      <ChevronDown className="h-3.5 w-3.5 opacity-60" />
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent>
+                    <DropdownMenuContent align="end" className="w-auto min-w-44">
                       <DropdownMenuGroup>
                         <DropdownMenuLabel>Filter by status</DropdownMenuLabel>
                         <DropdownMenuSeparator />

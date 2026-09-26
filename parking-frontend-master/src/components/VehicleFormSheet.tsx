@@ -13,12 +13,10 @@ import {
 } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Switch } from '@/components/ui/switch';
 import {
   useGetVendorsQuery,
   useGetVehicleTypesQuery,
   useCreateStaffMutation,
-  useUpdateStaffMutation,
 } from '@/app/(public)/(pages)/home/_redux/api';
 
 interface Vendor {
@@ -32,16 +30,6 @@ interface VehicleType {
   id: number;
   name: string;
   category: 'CAR' | 'BIKE';
-}
-
-interface StaffRecord {
-  id: number;
-  name: string;
-  company: string | null;
-  license_plate: string;
-  vehicle_type: string | null;
-  is_card_active: boolean;
-  card_code?: string;
 }
 
 const schema = yup.object({
@@ -63,18 +51,20 @@ const selectClassName =
   'h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30 w-full';
 
 interface VehicleFormSheetProps {
-  mode: 'create' | 'edit';
-  staff: StaffRecord | null;
+  // Pre-selects the tenant when registering from inside a tenant's member
+  // list, so the operator doesn't re-pick the tenant they just drilled into.
+  defaultCompanyId?: number | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSaved: () => void;
 }
 
-export function VehicleFormSheet({ mode, staff, open, onOpenChange, onSaved }: VehicleFormSheetProps) {
+// Registration only — editing an existing vehicle happens inside the member
+// card popup (components/tenants/MemberCardDialog).
+export function VehicleFormSheet({ defaultCompanyId, open, onOpenChange, onSaved }: VehicleFormSheetProps) {
   const { data: vendors = [] } = useGetVendorsQuery(undefined) as { data: Vendor[] };
   const { data: vehicleTypes = [] } = useGetVehicleTypesQuery(undefined) as { data: VehicleType[] };
   const [createStaff, { isLoading: creating }] = useCreateStaffMutation();
-  const [updateStaff, { isLoading: updating }] = useUpdateStaffMutation();
 
   const {
     register,
@@ -87,35 +77,20 @@ export function VehicleFormSheet({ mode, staff, open, onOpenChange, onSaved }: V
     defaultValues: { name: '', license_plate: '', company_id: undefined, vehicle_type_id: undefined },
   });
 
-  // Edit mode: company_id/vehicle_type_id are write_only on the API (never
-  // returned by GET), so resolve the current selection by matching the
-  // unique `name` field against the loaded vendor/vehicle-type lists.
   useEffect(() => {
     if (!open) return;
-    if (mode === 'edit' && staff) {
-      const vendor = vendors.find((v) => v.name === staff.company);
-      const vehicleType = vehicleTypes.find((vt) => vt.name === staff.vehicle_type);
-      reset({
-        name: staff.name,
-        license_plate: staff.license_plate,
-        company_id: vendor?.id,
-        vehicle_type_id: vehicleType?.id,
-      });
-    } else {
-      reset({ name: '', license_plate: '', company_id: undefined, vehicle_type_id: undefined });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, mode, staff, vendors, vehicleTypes]);
+    reset({
+      name: '',
+      license_plate: '',
+      company_id: defaultCompanyId ?? undefined,
+      vehicle_type_id: undefined,
+    });
+  }, [open, defaultCompanyId, reset]);
 
   const onSubmit = async (values: FormValues) => {
     try {
-      if (mode === 'create') {
-        await createStaff(values).unwrap();
-        toast.success('Vehicle registered');
-      } else if (staff) {
-        await updateStaff({ id: staff.id, ...values }).unwrap();
-        toast.success('Vehicle updated');
-      }
+      await createStaff(values).unwrap();
+      toast.success('Vehicle registered');
       onSaved();
     } catch {
       // Global axios interceptor already toasts DRF validation errors
@@ -124,42 +99,18 @@ export function VehicleFormSheet({ mode, staff, open, onOpenChange, onSaved }: V
     }
   };
 
-  const handleCardToggle = async (checked: boolean) => {
-    if (!staff) return;
-    try {
-      await updateStaff({ id: staff.id, is_card_active: checked }).unwrap();
-      toast.success(checked ? 'Card reactivated' : 'Card deactivated');
-      onSaved();
-    } catch {
-      // interceptor handles the error toast
-    }
-  };
-
-  const submitting = creating || updating;
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right">
         <SheetHeader>
-          <SheetTitle>{mode === 'create' ? 'Register vehicle' : 'Vehicle detail'}</SheetTitle>
+          <SheetTitle>Register vehicle</SheetTitle>
           <SheetDescription>
-            {mode === 'create'
-              ? "Adds a parking card for a tenant's staff member. Blocked if the tenant is already at its car/bike quota."
-              : 'Edit this vehicle, or deactivate its card if lost.'}
+            Adds a parking card for a tenant's staff member. Blocked if the tenant is already at its car/bike quota.
           </SheetDescription>
         </SheetHeader>
 
         <form onSubmit={handleSubmit(onSubmit)} className="flex flex-1 flex-col gap-4 overflow-y-auto px-4">
-          {mode === 'edit' && staff?.card_code && (
-            <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2">
-              <div>
-                <p className="text-xs font-medium">Card active</p>
-                <p className="text-[11px] text-muted-foreground font-mono">{staff.card_code}</p>
-              </div>
-              <Switch checked={staff.is_card_active} onCheckedChange={handleCardToggle} />
-            </div>
-          )}
-
           <div className="space-y-1.5">
             <label className="text-xs font-medium text-foreground">Name</label>
             <Input {...register('name')} placeholder="e.g. Ram Shrestha" />
@@ -209,8 +160,8 @@ export function VehicleFormSheet({ mode, staff, open, onOpenChange, onSaved }: V
           </div>
 
           <SheetFooter className="mt-auto px-0">
-            <Button type="submit" disabled={submitting}>
-              {submitting ? 'Saving…' : mode === 'create' ? 'Register vehicle' : 'Save changes'}
+            <Button type="submit" disabled={creating}>
+              {creating ? 'Saving…' : 'Register vehicle'}
             </Button>
           </SheetFooter>
         </form>

@@ -51,12 +51,13 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
+  viewportClassName,
   ...props
-}: DialogPrimitive.Popup.Props & { showCloseButton?: boolean }) {
+}: DialogPrimitive.Popup.Props & { showCloseButton?: boolean; viewportClassName?: string }) {
   return (
     <DialogPortal>
       <DialogBackdrop />
-      <DialogViewport>
+      <DialogViewport className={viewportClassName}>
         <DialogPrimitive.Popup
           data-slot="dialog-content"
           className={cn(

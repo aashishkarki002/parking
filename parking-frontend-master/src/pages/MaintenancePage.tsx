@@ -7,8 +7,8 @@ const MaintenancePage = () => {
     <PageShell title="Maintenance">
       <EmptyState
         icon={WrenchScrewdriverIcon}
-        title="No maintenance requests yet"
-        description="Maintenance requests will show up here."
+        title="No maintenance records yet"
+        description="Maintenance tasks and work orders will show up here."
       />
     </PageShell>
   );

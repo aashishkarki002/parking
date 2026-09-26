@@ -44,6 +44,7 @@ interface ParkingSession {
   payment_method: PaymentMethod | null;
   status: SessionStatus;
   notes: string;
+  auto_closed?: boolean;
 }
 
 const PAGE_SIZE = 10;
@@ -185,9 +186,6 @@ const SessionsPage = () => {
   const [closeSession] = usePrintBillMutation();
   const [markPaid] = usePaymentMethodMutation();
 
-  // Seeded once from the URL so links from the sidebar (e.g. Sessions ›
-  // Unpaid exits) land on the right filter without fighting local state
-  // changes afterwards.
   const [searchParams] = useSearchParams();
   const [tab, setTab] = useState<SessionStatus | 'ALL'>(() => {
     const fromUrl = searchParams.get('tab');
@@ -199,7 +197,7 @@ const SessionsPage = () => {
     return fromUrl === 'CASH' || fromUrl === 'ONLINE_PAYMENT' || fromUrl === 'UNPAID' ? fromUrl : 'ALL';
   });
   const [entryFilter, setEntryFilter] = useState<'ALL' | 'TODAY'>('ALL');
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(() => searchParams.get('search') ?? '');
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [addOpen, setAddOpen] = useState(false);
@@ -211,6 +209,20 @@ const SessionsPage = () => {
     const id = setInterval(() => setNow(dayjs()), 30_000);
     return () => clearInterval(id);
   }, []);
+
+  // Re-sync when the sidebar navigates here with a different ?tab=/?payment=
+  // while the page is already mounted (query-only navigation doesn't remount).
+  useEffect(() => {
+    const fromUrl = searchParams.get('tab');
+    const next = TABS.some((t) => t.key === fromUrl) ? (fromUrl as SessionStatus | 'ALL') : 'ALL';
+    setTab((current) => (current === next ? current : next));
+  }, [searchParams]);
+
+  useEffect(() => {
+    const fromUrl = searchParams.get('payment');
+    const next = fromUrl === 'CASH' || fromUrl === 'ONLINE_PAYMENT' || fromUrl === 'UNPAID' ? fromUrl : 'ALL';
+    setPaymentFilter((current) => (current === next ? current : next));
+  }, [searchParams]);
 
   const vehicleTypeOptions = useMemo(
     () => Array.from(new Set(sessions.map((s) => s.vehicle_type).filter(Boolean))).sort(),
@@ -228,7 +240,7 @@ const SessionsPage = () => {
     );
 
     const closedToday = sessions.filter(
-      (s) => s.status !== 'ACTIVE' && s.exit_time && dayjs(s.exit_time).isSame(now, 'day')
+      (s) => s.status !== 'ACTIVE' && !s.auto_closed && s.exit_time && dayjs(s.exit_time).isSame(now, 'day')
     );
     const avgStay = closedToday.length
       ? closedToday.reduce((sum, s) => sum + (s.duration_minutes ?? 0), 0) / closedToday.length
@@ -494,7 +506,7 @@ const SessionsPage = () => {
                       <Badge
                         variant="secondary"
                         className={cn(
-                          'rounded-md px-1.5 py-0.5 font-mono text-[10px] tabular-nums',
+                          'rounded-md px-1.5 py-0.5  text-[10px] tabular-nums',
                           tab === t.key ? 'bg-accent text-primary' : 'bg-muted text-muted-foreground'
                         )}
                       >
@@ -632,7 +644,7 @@ const SessionsPage = () => {
                           />
                         </TableCell>
                         <TableCell className="px-3 py-2.5">
-                          <span className="font-mono text-[12.5px] font-semibold text-primary">{s.ticket_number}</span>
+                          <span className=" text-[12.5px] font-semibold text-primary">{s.ticket_number}</span>
                           {s.registered_staff_member && (
                             <span className="mt-0.5 block text-[10.5px] text-muted-foreground">{s.registered_staff_member}</span>
                           )}
@@ -644,7 +656,7 @@ const SessionsPage = () => {
                             </span>
                             <div className="flex flex-col">
                               <span className="text-[12.5px] font-semibold text-foreground">{s.vehicle_type}</span>
-                              <span className="font-mono text-[11px] tracking-tight text-muted-foreground">
+                              <span className=" text-[11px] tracking-tight text-muted-foreground">
                                 {s.license_plate || '—'}
                               </span>
                             </div>
@@ -652,14 +664,14 @@ const SessionsPage = () => {
                         </TableCell>
                         <TableCell className="px-3 py-2.5">
                           <div className="flex flex-col">
-                            <span className="font-mono text-[13px] tabular-nums text-foreground">{formatTime(s.entry_time)}</span>
+                            <span className=" text-[13px] tabular-nums text-foreground">{formatTime(s.entry_time)}</span>
                             <span className="text-[10.5px] text-muted-foreground">{formatDate(s.entry_time)}</span>
                           </div>
                         </TableCell>
                         <TableCell className="px-3 py-2.5">
                           {s.exit_time ? (
                             <div className="flex flex-col">
-                              <span className="font-mono text-[13px] tabular-nums text-foreground">{formatTime(s.exit_time)}</span>
+                              <span className=" text-[13px] tabular-nums text-foreground">{formatTime(s.exit_time)}</span>
                               <span className="text-[10.5px] text-muted-foreground">{formatDate(s.exit_time)}</span>
                             </div>
                           ) : (
@@ -669,12 +681,12 @@ const SessionsPage = () => {
                         <TableCell className="px-3 py-2.5">
                           <span
                             className={cn(
-                              'inline-flex items-center gap-1.5 font-mono text-[12px] font-semibold tabular-nums',
+                              'inline-flex items-center gap-1.5 text-[12px] font-semibold tabular-nums',
                               s.status === 'ACTIVE' ? 'text-primary' : 'text-foreground'
                             )}
                           >
                             {s.status === 'ACTIVE' && <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />}
-                            {formatDuration(minutes)}
+                            {s.auto_closed ? 'Auto-closed' : formatDuration(minutes)}
                           </span>
                         </TableCell>
                         <TableCell className="px-3 py-2.5">
@@ -688,7 +700,7 @@ const SessionsPage = () => {
                         <TableCell className="px-3 py-2.5 text-right">
                           <span
                             className={cn(
-                              'font-mono text-[12.5px] font-bold tabular-nums',
+                              'text-[12.5px] font-bold tabular-nums',
                               amountOwed
                                 ? 'text-destructive'
                                 : s.calculated_charge == null || Number(s.calculated_charge) === 0

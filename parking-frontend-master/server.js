@@ -25,8 +25,27 @@ const limiter = rateLimit({
 });
 app.use(limiter);
 
-// Static files from Vite build
-app.use(express.static(distPath, { index: false }));
+// The service worker and manifest must always be revalidated, otherwise a
+// cached sw.js keeps serving the previous build's precache forever.
+app.use((req, res, next) => {
+  if (/^\/(sw\.js|registerSW\.js|manifest\.webmanifest|workbox-.*\.js)$/.test(req.path)) {
+    res.set('Cache-Control', 'no-cache');
+  }
+  next();
+});
+
+// Static files from Vite build. /assets/* filenames are content-hashed, so they
+// can be cached immutably; everything else falls back to revalidation.
+app.use(
+  express.static(distPath, {
+    index: false,
+    setHeaders: (res, filePath) => {
+      if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+        res.set('Cache-Control', 'public, max-age=31536000, immutable');
+      }
+    },
+  }),
+);
 
 // SPA: all other routes serve index.html (no cache so users get latest after deploy)
 app.get('*', (_req, res) => {

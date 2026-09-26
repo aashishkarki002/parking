@@ -7,6 +7,7 @@ import StoreProvider from './lib/public/StoreProvider';
 import { ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import { ThemeProvider } from './hooks/theme-provider';
+import { ReloadPrompt } from './components/pwa/ReloadPrompt';
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
@@ -15,6 +16,7 @@ ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
         <BrowserRouter>
           <App />
           <ToastContainer position="top-right" autoClose={3000} hideProgressBar />
+          <ReloadPrompt />
         </BrowserRouter>
       </StoreProvider>
     </ThemeProvider>
