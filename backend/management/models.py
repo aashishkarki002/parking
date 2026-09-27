@@ -36,7 +36,7 @@ class ParkingConfiguration(models.Model):
     # restarts the clock. Time past the allowance is billed at the vehicle's
     # normal pricing plan. See ParkingSession._apply_tenant_allowance_billing.
     tenant_allowance_enabled = models.BooleanField(
-        default=True,
+        default=False,
         help_text="When on, registered tenant vehicles park free only up to the allowance "
                    "below; time past it is billed normally. When off, pass holders park "
                    "free without limit and other tenants are billed like visitors."

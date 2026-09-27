@@ -433,6 +433,8 @@ class TenantAllowanceBillingTests(TestCase):
 
     def setUp(self):
         self.config = ParkingConfiguration.get_solo()
+        self.config.tenant_allowance_enabled = True
+        self.config.save()
         self.vendor = make_vendor()
         self.vehicle_type = make_vehicle_type()
         self.staff = make_staff(company=self.vendor, vehicle_type=self.vehicle_type,
@@ -588,6 +590,8 @@ class NightPricingTests(TestCase):
 
     def setUp(self):
         self.config = ParkingConfiguration.get_solo()
+        self.config.tenant_allowance_enabled = True
+        self.config.save()
         self.car = make_vehicle_type('Night Car', rate_per_hour='60.00')
         self.car.pricing_plan.night_rate_per_hour = Decimal('100.00')
         self.car.pricing_plan.save()
