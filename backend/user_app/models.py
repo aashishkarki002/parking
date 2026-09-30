@@ -32,6 +32,14 @@ class User(AbstractUser):
     is_phone_verified = models.BooleanField(default=False)
     photo = models.ImageField(upload_to='user_photos/', null=True, blank=True)
 
+    # Set for tenant-portal logins (the `tenant` role): the tenant whose
+    # student requests this account submits and sees.
+    vendor = models.ForeignKey(
+        'management.Vendor', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='portal_users',
+        help_text="Tenant-portal accounts only: the tenant this login belongs to."
+    )
+
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = []
 

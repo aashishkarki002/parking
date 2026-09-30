@@ -376,8 +376,8 @@ class Command(BaseCommand):
         for _ in range(count):
             vehicle_type = random.choice(vehicle_types)
             scenario = random.choices(
-                ["active", "staff_pass", "completed_paid", "completed_unpaid", "waived_coupon"],
-                weights=[15, 20, 35, 20, 10],
+                ["active", "staff_pass", "completed_paid", "completed_unpaid", "waived_coupon", "lost_ticket"],
+                weights=[15, 20, 35, 20, 10, 3],
             )[0]
 
             entry_time = now - timedelta(
@@ -422,6 +422,17 @@ class Command(BaseCommand):
                 is_sample=True,
             )
             session.save()
+
+            if scenario == "lost_ticket":
+                # Closed at the POS at the flat fine, then paid. mark_lost()
+                # exits "now"; move the exit back to this sample's exit_time.
+                session.mark_lost()
+                session.exit_time = exit_time
+                session.duration_minutes = session.calculate_total_duration_minutes()
+                session.mark_as_paid(method=random.choice(SESSION_PAYMENT_METHODS))
+                session.save()
+                sessions.append(session)
+                continue
 
             if scenario == "waived_coupon":
                 waiver = next((c for c in coupons if c.validation_type == "COMPLETE_WAIVER" and c.is_active), None)

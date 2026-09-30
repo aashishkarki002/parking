@@ -492,27 +492,33 @@ class TenantAllowanceBillingTests(TestCase):
     def test_re_entering_does_not_reset_the_12h_clock(self):
         self._give_pass()
         self._bill(self._session(0, 6))
-        # Back after a 1h break for 8h: only 6h of the allowance is left.
+        # Back at 7h for 8h: the window opened at 0h still ends at 12h,
+        # so 7h-12h is free and 12h-15h is charged.
         session = self._bill(self._session(7, 8))
 
         self.assertEqual(session.status, 'COMPLETED')
-        self.assertEqual(session.calculated_charge, Decimal('120.00'))
+        self.assertEqual(session.calculated_charge, Decimal('180.00'))
 
-    def test_repeated_six_hour_visits_are_charged_once_allowance_is_used(self):
+    def test_entry_after_the_window_ends_opens_a_new_window(self):
         self._give_pass()
         self._bill(self._session(0, 6))
-        self._bill(self._session(6.5, 6))
-        session = self._bill(self._session(13, 6))
+        second = self._bill(self._session(6.5, 6))
+        third = self._bill(self._session(13, 6))
 
-        self.assertEqual(session.calculated_charge, Decimal('360.00'))
+        # 6.5h-12.5h: last 30 min fall after the 0h-12h window.
+        self.assertEqual(second.calculated_charge, Decimal('30.00'))
+        # 13h is after 12h, so it opens a fresh 13h-25h window.
+        self.assertEqual(third.status, 'COVERED_BY_PASS')
+        self.assertEqual(third.calculated_charge, Decimal('0.00'))
 
-    def test_only_the_part_of_a_prior_session_inside_24h_counts(self):
-        # Prior session 0h-10h; new entry at 30h, so the 24h lookback starts
-        # at 6h and only 4h of the prior session counts. 8h free left.
-        self._bill(self._session(0, 10))
-        session = self._bill(self._session(30, 9))
+    def test_window_is_found_through_a_chain_of_re_entries(self):
+        # Windows: 0h (entries 0h, 10h), then 13h (entries 13h, 20h).
+        for start in (0, 10, 13):
+            self._bill(self._session(start, 0.5))
+        session = self._bill(self._session(20, 7))
 
-        self.assertEqual(session.calculated_charge, Decimal('60.00'))
+        # 13h window ends at 25h: 25h-27h charged.
+        self.assertEqual(session.calculated_charge, Decimal('120.00'))
 
     def test_sessions_older_than_24h_do_not_count(self):
         self._bill(self._session(0, 10))
@@ -567,15 +573,12 @@ class TenantAllowanceBillingTests(TestCase):
         self.assertEqual(session.status, 'COVERED_BY_PASS')
         self.assertEqual(session.calculated_charge, Decimal('0.00'))
 
-    def test_custom_free_and_lookback_hours(self):
+    def test_custom_free_hours(self):
         self.config.tenant_free_hours = 8
-        self.config.tenant_lookback_hours = 48
         self.config.save()
-        self._bill(self._session(0, 2))
-        # Prior 2h is 28h back: still inside the 48h lookback. 6h free left.
-        session = self._bill(self._session(28, 7))
+        session = self._bill(self._session(0, 10))
 
-        self.assertEqual(session.calculated_charge, Decimal('60.00'))
+        self.assertEqual(session.calculated_charge, Decimal('120.00'))
 
 
 class NightPricingTests(TestCase):
@@ -709,14 +712,30 @@ class NightPricingTests(TestCase):
         self.assertEqual(session.status, 'COVERED_BY_PASS')
         self.assertEqual(session.calculated_charge, Decimal('0.00'))
 
-    def test_allowance_counts_only_prior_day_minutes(self):
+    def test_entry_at_noon_is_free_only_until_22h(self):
+        self._tenant(with_pass=True)
+        # 12:00-22:00 free; 22:00-00:00 is night (200).
+        session = self._bill(self.at(1, 12), self.at(2, 0), license_plate=self.PLATE)
+
+        self.assertEqual(session.calculated_charge, Decimal('200.00'))
+
+    def test_day_hours_after_12h_from_entry_are_charged(self):
+        self._tenant(with_pass=True)
+        # 12:00-12:00 next day: 12:00-22:00 free, 8h night (800), then
+        # 06:00-12:00 is past the 12h window (360).
+        session = self._bill(self.at(1, 12), self.at(2, 12), license_plate=self.PLATE)
+
+        self.assertEqual(session.calculated_charge, Decimal('1160.00'))
+
+    def test_next_day_entry_opens_a_new_window(self):
         self._tenant()
-        # Prior 18:00-08:00: 8h night, 6h day -> 6h of the 12h allowance used.
-        self._bill(self.at(1, 18), self.at(2, 8), license_plate=self.PLATE)
-        # 09:00-17:00: 8h day, 6h free -> 2h charged.
+        # 18:00-08:00: window 18:00-06:00, so 06:00-08:00 is charged.
+        first = self._bill(self.at(1, 18), self.at(2, 8), license_plate=self.PLATE)
+        # 09:00 is after that window: a fresh 12h, all free.
         session = self._bill(self.at(2, 9), self.at(2, 17), license_plate=self.PLATE)
 
-        self.assertEqual(session.calculated_charge, Decimal('120.00'))
+        self.assertEqual(first.calculated_charge, Decimal('920.00'))
+        self.assertEqual(session.calculated_charge, Decimal('0.00'))
 
     def test_disabled_allowance_pass_holder_still_pays_night(self):
         self.config.tenant_allowance_enabled = False
@@ -726,6 +745,81 @@ class NightPricingTests(TestCase):
 
         self.assertEqual(session.status, 'COMPLETED')
         self.assertEqual(session.calculated_charge, Decimal('100.00'))
+
+    # --- Night boundary grace (registered vehicles, default 15/15 min) ---
+
+    def _pass_holder_bill(self, start, end, allowance=True):
+        self.config.tenant_allowance_enabled = allowance
+        self.config.save()
+        self.car.pricing_plan.minimum_charge = Decimal('30.00')
+        self.car.pricing_plan.save()
+        if not Staff.objects.filter(license_plate=self.PLATE).exists():
+            self._tenant(with_pass=True)
+        return self._bill(start, end, license_plate=self.PLATE)
+
+    def test_arriving_inside_morning_grace_is_free(self):
+        for minute in (58, 45):
+            session = self._pass_holder_bill(self.at(1, 5, minute), self.at(1, 14))
+            self.assertEqual(session.calculated_charge, Decimal('0.00'), minute)
+            self.assertEqual(session.status, 'COVERED_BY_PASS')
+            self.assertIn(f'Night grace: {60 - minute}m free', session.notes)
+
+    def test_arriving_before_morning_grace_bills_every_night_minute(self):
+        # 05:44: 16 night min > 15, so all 16 billed (26.67) -> 30 minimum.
+        session = self._pass_holder_bill(self.at(1, 5, 44), self.at(1, 14))
+        self.assertEqual(session.calculated_charge, Decimal('30.00'))
+        # 05:30: 30 min at 100/h = 50.
+        session = self._pass_holder_bill(self.at(2, 5, 30), self.at(2, 14))
+        self.assertEqual(session.calculated_charge, Decimal('50.00'))
+
+    def test_leaving_inside_evening_grace_is_free(self):
+        for minute in (10, 15):
+            session = self._pass_holder_bill(self.at(1, 12), self.at(1, 22, minute))
+            self.assertEqual(session.calculated_charge, Decimal('0.00'), minute)
+
+    def test_leaving_after_evening_grace_bills_every_night_minute(self):
+        session = self._pass_holder_bill(self.at(1, 12), self.at(1, 22, 16))
+        self.assertEqual(session.calculated_charge, Decimal('30.00'))
+
+    def test_stay_entirely_inside_the_night_gets_no_grace(self):
+        session = self._pass_holder_bill(self.at(1, 22, 5), self.at(1, 22, 8))
+        self.assertEqual(session.calculated_charge, Decimal('30.00'))
+
+    def test_full_nights_are_billed_as_before(self):
+        session = self._pass_holder_bill(self.at(1, 20), self.at(2, 8))
+        self.assertEqual(session.calculated_charge, Decimal('800.00'))
+        session = self._pass_holder_bill(self.at(3, 12), self.at(4, 0))
+        self.assertEqual(session.calculated_charge, Decimal('200.00'))
+
+    def test_multi_day_stay_waives_only_its_edge_segments(self):
+        # 05:50 day 1 -> 22:10 day 2 with the allowance OFF: the first and
+        # last 10 min are waived; the full night in between is 800.
+        session = self._pass_holder_bill(self.at(1, 5, 50), self.at(2, 22, 10), allowance=False)
+        self.assertEqual(session.calculated_charge, Decimal('800.00'))
+
+    def test_grace_applies_with_allowance_off(self):
+        session = self._pass_holder_bill(self.at(1, 5, 50), self.at(1, 14), allowance=False)
+        self.assertEqual(session.calculated_charge, Decimal('0.00'))
+        self.assertEqual(session.status, 'COVERED_BY_PASS')
+
+    def test_zero_grace_turns_it_off(self):
+        self.config.night_morning_grace_minutes = 0
+        self.config.night_evening_grace_minutes = 0
+        self.config.save()
+        session = self._pass_holder_bill(self.at(1, 5, 58), self.at(1, 14))
+        self.assertEqual(session.calculated_charge, Decimal('30.00'))
+
+    def test_visitor_gets_no_boundary_grace(self):
+        # 05:50-07:00: 10 night min (16.67) + 60 day (60) = 76.67 -> 80.
+        session = self._bill(self.at(1, 5, 50), self.at(1, 7))
+        self.assertEqual(session.calculated_charge, Decimal('80.00'))
+
+    def test_registered_without_pass_and_allowance_off_bills_like_visitor(self):
+        self.config.tenant_allowance_enabled = False
+        self.config.save()
+        self._tenant()
+        session = self._bill(self.at(1, 5, 50), self.at(1, 7), license_plate=self.PLATE)
+        self.assertEqual(session.calculated_charge, Decimal('80.00'))
 
     def test_stamp_overage_after_22h_is_billed_to_tenant_at_night_rate(self):
         vendor = make_vendor(stamp_free_minutes=60)
@@ -758,6 +852,23 @@ class NightPricingSettingsAPITests(TestCase):
         self.assertEqual(res.status_code, status.HTTP_200_OK, res.content)
         self.assertEqual(ParkingConfiguration.get_solo().night_start, time(21, 0))
 
+    def test_night_boundary_grace_is_readable_and_editable(self):
+        res = self.client.get('/api/v1/parking/configuration/')
+        self.assertEqual(res.data['night_morning_grace_minutes'], 15)
+        self.assertEqual(res.data['night_evening_grace_minutes'], 15)
+
+        res = self.client.patch('/api/v1/parking/configuration/',
+                                {'night_morning_grace_minutes': 30, 'night_evening_grace_minutes': 10},
+                                format='json')
+        self.assertEqual(res.status_code, status.HTTP_200_OK, res.content)
+        config = ParkingConfiguration.get_solo()
+        self.assertEqual((config.night_morning_grace_minutes, config.night_evening_grace_minutes), (30, 10))
+
+    def test_negative_night_boundary_grace_is_rejected(self):
+        res = self.client.patch('/api/v1/parking/configuration/',
+                                {'night_morning_grace_minutes': -1}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
     def test_equal_night_start_and_end_is_rejected(self):
         res = self.client.patch('/api/v1/parking/configuration/',
                                 {'night_start': '06:00', 'night_end': '06:00'}, format='json')
@@ -768,6 +879,37 @@ class NightPricingSettingsAPITests(TestCase):
         res = self.client.patch(f'/api/v1/parking/pricing-plans/{plan.pk}',
                                 {'night_rate_per_hour': '-5'}, format='json')
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class ParkingRatesAPITests(TestCase):
+    """GET /parking/rates — the POS rate card's day/night rates and window."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.car = make_vehicle_type('4 wheelers', free_duration_minutes=10, rate_per_hour='60.00')
+        self.car.pricing_plan.night_rate_per_hour = Decimal('100.00')
+        self.car.pricing_plan.minimum_charge = Decimal('30.00')
+        self.car.pricing_plan.save()
+
+    def test_pos_user_reads_rates_and_night_window(self):
+        self.client.force_authenticate(user=make_pos_user('pos-rates@example.com'))
+        res = self.client.get('/api/v1/parking/rates')
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK, res.content)
+        self.assertEqual(res.data['night_start'], time(22, 0))
+        self.assertEqual(res.data['night_end'], time(6, 0))
+        self.assertEqual(res.data['time_zone'], 'Asia/Kathmandu')
+        self.assertTrue(res.data['night_pricing_enabled'])
+        [car] = res.data['vehicle_types']
+        self.assertEqual(car['name'], '4 wheelers')
+        self.assertEqual(car['pricing_plan']['night_rate_per_hour'], '100.00')
+        self.assertEqual(car['pricing_plan']['rate_details'], {'rate_per_hour': '60.00'})
+
+    def test_rates_need_a_pos_role(self):
+        self.client.force_authenticate(
+            user=User.objects.create_user(email='nobody@example.com', password='x'))
+        res = self.client.get('/api/v1/parking/rates')
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
 
 
 class RFIDGateTests(TestCase):
@@ -1345,3 +1487,128 @@ class GlobalSearchAPITests(TestCase):
     def test_tenant_name_match(self):
         response = self.search(make_pos_user('pos@example.com'), 'acme')
         self.assertIn('tenant', self.types(response))
+
+
+class LostTicketAPITests(TestCase):
+    """
+    POST sessions/<ticket>/mark-lost — the customer lost their ticket: the
+    session closes now at the flat ParkingConfiguration.lost_ticket_fine,
+    whatever the parking fee would have been, and is paid via mark-paid.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        self.client.force_authenticate(user=make_pos_user('pos@example.com'))
+        self.vehicle_type = make_vehicle_type()
+
+    def _post(self, session, action, data=None):
+        return self.client.post(
+            f'/api/v1/parking/sessions/{session.ticket_number}/{action}', data or {}, format='json')
+
+    def test_long_stay_is_closed_at_the_flat_fine(self):
+        # 10h at 60/hr would be 600; a lost ticket pays the fine only.
+        session = make_session(self.vehicle_type, entry_minutes_ago=600)
+        response = self._post(session, 'mark-lost')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['lost_ticket'])
+        self.assertEqual(response.data['calculated_charge'], '100.00')
+        session.refresh_from_db()
+        self.assertEqual(session.status, 'COMPLETED')
+        self.assertIsNotNone(session.exit_time)
+        self.assertIn('Lost ticket', session.notes)
+
+    def test_fine_is_paid_like_any_bill(self):
+        session = make_session(self.vehicle_type, entry_minutes_ago=30)
+        self._post(session, 'mark-lost')
+        response = self._post(session, 'mark-paid', {'payment_method': 'CASH'})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        session.refresh_from_db()
+        self.assertEqual(session.status, 'PAID')
+        self.assertEqual(session.calculated_charge, Decimal('100.00'))
+
+    def test_fine_comes_from_configuration(self):
+        config = ParkingConfiguration.get_solo()
+        config.lost_ticket_fine = Decimal('150.00')
+        config.save()
+        session = make_session(self.vehicle_type, entry_minutes_ago=5)
+
+        self.assertEqual(self._post(session, 'mark-lost').data['calculated_charge'], '150.00')
+
+    def test_rescanning_or_a_coupon_does_not_reprice_the_fine(self):
+        session = make_session(self.vehicle_type, entry_minutes_ago=600)
+        exit_time = self._post(session, 'mark-lost').data['exit_time']
+        rescan = self._post(session, 'calculate-charge')
+        coupon = Coupon.objects.create(
+            code='LOSTFREE', validation_type='FREE_MINUTES', value_minutes=600, max_uses=1)
+        self._post(session, 'apply-coupon', {'coupon_code': coupon.code})
+
+        self.assertEqual(rescan.data['exit_time'], exit_time)
+        session.refresh_from_db()
+        self.assertEqual(session.calculated_charge, Decimal('100.00'))
+
+    def test_stamped_ticket_drops_its_tenant_bill(self):
+        vendor = make_vendor(stamp_free_minutes=60)
+        session = make_session(self.vehicle_type, entry_minutes_ago=180)
+        session.add_stamp(vendor)
+        self._post(session, 'calculate-charge')
+        self.assertTrue(TenantBill.objects.filter(session=session).exists())
+        session.exit_time = None
+        session.status = 'ACTIVE'
+        session.save()
+
+        self._post(session, 'mark-lost')
+        self.client.get(f'/api/v1/parking/sessions/{session.ticket_number}')
+
+        session.refresh_from_db()
+        self.assertFalse(TenantBill.objects.filter(session=session).exists())
+        self.assertEqual(session.calculated_charge, Decimal('100.00'))
+
+    def test_already_paid_ticket_is_rejected(self):
+        session = make_session(self.vehicle_type, entry_minutes_ago=30)
+        self._post(session, 'calculate-charge')
+        self._post(session, 'mark-paid', {'payment_method': 'CASH'})
+        response = self._post(session, 'mark-lost')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('already closed', response.data['error'])
+
+    def test_unknown_ticket_is_404(self):
+        response = self.client.post('/api/v1/parking/sessions/TI20260101-99999/mark-lost')
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def _lookup(self, q):
+        return self.client.get('/api/v1/parking/sessions/open-lookup', {'q': q})
+
+    def test_lookup_by_plate_ignores_spaces_and_case(self):
+        session = make_session(self.vehicle_type, entry_minutes_ago=30, license_plate='BA 1 PA 8342')
+        make_session(self.vehicle_type, entry_minutes_ago=30, license_plate='BA 2 KHA 1111')
+
+        for q in ('8342', 'ba1pa8342', 'BA 1 PA 83'):
+            response = self._lookup(q)
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            self.assertEqual([s['ticket_number'] for s in response.data], [session.ticket_number], q)
+
+    def test_lookup_by_ticket_number(self):
+        session = make_session(self.vehicle_type, entry_minutes_ago=30, license_plate='7813')
+
+        response = self._lookup(session.ticket_number.lower())
+
+        self.assertEqual([s['id'] for s in response.data], [str(session.id)])
+
+    def test_lookup_skips_paid_and_already_lost_sessions(self):
+        paid = make_session(self.vehicle_type, entry_minutes_ago=30, license_plate='5555')
+        self._post(paid, 'calculate-charge')
+        self._post(paid, 'mark-paid', {'payment_method': 'CASH'})
+        lost = make_session(self.vehicle_type, entry_minutes_ago=30, license_plate='5555')
+        self._post(lost, 'mark-lost')
+        parked = make_session(self.vehicle_type, entry_minutes_ago=30, license_plate='5555')
+
+        self.assertEqual([s['ticket_number'] for s in self._lookup('5555').data], [parked.ticket_number])
+
+    def test_lookup_needs_two_characters(self):
+        make_session(self.vehicle_type, entry_minutes_ago=30, license_plate='5555')
+
+        self.assertEqual(self._lookup('5').data, [])

@@ -40,6 +40,8 @@ export interface IUserPayload {
   };
   permissions: any[];
   photo: string;
+  // Tenant-portal logins only: the tenant this account submits students for.
+  vendor?: { id: number; name: string } | null;
   region: {
     id: number;
     name: string;

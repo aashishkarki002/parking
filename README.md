@@ -109,3 +109,45 @@ each tap. Those can't be used as gate cards: they'll always come up as
 "Unknown card". Then, on the POS screen: tap once to see green ENTRY, wait
 more than 10s, and tap again to see orange EXIT. **Tenant gate today**
 (sidebar → Sessions) shows who is currently parked.
+
+## Student parking
+
+Tenants (e.g. institutes) register their students for free parking time.
+
+1. **Tenant login.** Set it in Django admin → **Vendor / Tenant** → open the
+   tenant → **Tenant portal login**: email, password (blank keeps the current
+   one; typing a new one resets it) and **Login active**. The changelist shows
+   each tenant's login. (A superadmin can also create one under **Manage
+   operators** with role **Tenant portal**.) Tenants sign in at
+   **`/tenant-portal/login`** (linked from the staff login page) and land on
+   `/tenant-portal`; they have no desk access. Each login page only accepts
+   its own accounts: the server refuses a staff account on the tenant page
+   and a tenant account on the staff page.
+2. **Request.** The tenant types students in or uploads a `.csv` / `.xlsx`
+   sheet (template on the page). Columns: SN, Batch Start Date, **Batch End
+   Date** (required), Class Days (`Sun-Fri`, `Mon, Wed`, `Daily`), Class Time
+   From/To, Student Name, Contact Number, Vehicle Number, Vehicle Type
+   (`Bike`/`Car`, optional), Status (`Active`/`Inactive`). The upload is
+   checked row by row first; nothing is saved while any row has an error.
+3. **Review.** Admins approve or reject each student under **Student
+   requests** (or in Django admin → Students). A rejection reason is shown
+   to the tenant. Changing a student's end date sends them back to pending.
+
+### At the gate
+A student counts only while **approved**, **active**, and today is within
+their batch dates. On a class day they park free from class start minus the
+**early grace** to class end plus the **late grace** (default 15 min each,
+Django admin → Parking System Configuration; each tenant can override both
+under Vendors). Time outside that window is billed like a visitor, and a
+student without both class times pays like a visitor. Recognised two ways:
+
+- **Ticket:** the vehicle number typed at entry matches the student's
+  (case and spaces ignored). At exit the POS shows a toast with the student's
+  name, tenant and batch end date.
+- **Student QR card** (`ST-<uuid>`, printed from Student requests): scanned
+  into either scan field, it toggles entry/exit like an RFID tap. An expired
+  or inactive student can't enter, but can always leave.
+
+A registered tenant vehicle with the same number is billed as a tenant, not
+a student. Deploying needs `pip install -r requirements.txt` (adds
+`openpyxl`) and `python manage.py migrate`.

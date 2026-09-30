@@ -1,10 +1,13 @@
 import { baseApiSlice } from '@/lib/public/baseApiSlice';
+import type { NightPricingConfig, PricingPlan } from '@/components/settings/types';
 
 // Match Django URLs used by Next app:
 //   POST /api/v1/parking/sessions/                      (scan/create)
 //   GET  /api/v1/parking/sessions/<ticket>               (read-only lookup, no side effects — used by the Stamp flow)
 //   POST /api/v1/parking/sessions/<ticket>/calculate-charge
 //   POST /api/v1/parking/sessions/<ticket>/mark-paid
+//   POST /api/v1/parking/sessions/<ticket>/mark-lost     (lost ticket: close now at the flat fine)
+//   GET  /api/v1/parking/sessions/open-lookup?q=<plate|ticket>  (unpaid parked sessions, to find a lost ticket)
 //   POST /api/v1/parking/sessions/<ticket>/apply-coupon
 //   POST /api/v1/parking/sessions/<ticket>/apply-stamp   (records a tenant's stamp; grants that tenant's free minutes)
 //   POST /api/v1/parking/sessions/tenant-card/scan       (preview only, no write)
@@ -13,6 +16,7 @@ import { baseApiSlice } from '@/lib/public/baseApiSlice';
 //   POST /api/v1/parking/rfid-force-entry                (operator fix: that "exit" was really an arrival)
 //   GET  /api/v1/parking/rfid-today                      (today's tenant sessions, parked first)
 //   GET  /api/v1/parking/rfid-lookup?uid=<uid>           (whose card is this — read-only, no gate action)
+//   GET  /api/v1/parking/rates                           (rate card: each vehicle type's plan + night window)
 //   GET  /api/v1/parking/staff/?search=<name|plate>      (manual lookup for offline OTP entry)
 //   POST /api/v1/parking/staff/                          (register vehicle)
 //   POST  /api/v1/parking/rfid-cards                     (issue an RFID card to a member — uid + staff)
@@ -21,6 +25,19 @@ import { baseApiSlice } from '@/lib/public/baseApiSlice';
 //   GET  /api/v1/parking/vendors/                        (tenant companies / units)
 //   POST /api/v1/parking/parking-passes/                 (issue a monthly pass)
 //   GET  /api/v1/parking/search?q=<term>                 (global ⌘K search across sessions, members, tenants, ...)
+// GET /parking/rates — see management.views.parking_rates.
+export interface ParkingRates extends NightPricingConfig {
+  currency_symbol: string;
+  time_zone: string; // IANA, e.g. "Asia/Kathmandu" — the night window is in this zone
+  vehicle_types: {
+    id: number;
+    name: string;
+    category: string;
+    free_duration_minutes: number;
+    pricing_plan: PricingPlan | null;
+  }[];
+}
+
 export const scanApi = 'parking/sessions';
 export const staffApi = 'parking/staff';
 export const vendorsApi = 'parking/vendors';
@@ -28,6 +45,7 @@ export const vehicleTypesApi = 'parking/vehicle-types';
 export const parkingPassesApi = 'parking/parking-passes';
 export const rfidApi = 'parking/rfid';
 export const globalSearchApi = 'parking/search';
+export const ratesApi = 'parking/rates';
 
 export type GlobalSearchType =
   | 'session'
@@ -87,6 +105,25 @@ export const scanApiSlice = baseApiSlice.injectEndpoints({
         };
       },
       invalidatesTags: ['Sessions'],
+    }),
+    markLostTicket: builder.mutation({
+      query: ({ ticketNo }: { ticketNo: string }) => {
+        return {
+          url: `${scanApi}/${ticketNo}/mark-lost`,
+          method: 'POST',
+        };
+      },
+      invalidatesTags: ['Sessions'],
+    }),
+    openSessionLookup: builder.query({
+      query: (q: string) => {
+        return {
+          url: `${scanApi}/open-lookup`,
+          method: 'GET',
+          params: { q },
+        };
+      },
+      keepUnusedDataFor: 0,
     }),
     applyCoupon: builder.mutation({
       query: ({ ticketNo, coupon_code }) => {
@@ -227,6 +264,12 @@ export const scanApiSlice = baseApiSlice.injectEndpoints({
       },
       invalidatesTags: ['Staff'],
     }),
+    // Tagged so plan, vehicle-type and night-window edits made in Settings
+    // refresh the POS rate card.
+    getParkingRates: builder.query<ParkingRates, void>({
+      query: () => ({ url: ratesApi, method: 'GET' }),
+      providesTags: ['PricingPlans', 'VehicleTypes', 'Configuration'],
+    }),
     getVehicleTypes: builder.query({
       query: () => {
         return {
@@ -309,6 +352,8 @@ export const {
   usePrintBillMutation,
   useScanCodeMutation,
   usePaymentMethodMutation,
+  useMarkLostTicketMutation,
+  useLazyOpenSessionLookupQuery,
   useApplyCouponMutation,
   useTenantCardScanMutation,
   useTenantCardConfirmMutation,
@@ -324,6 +369,7 @@ export const {
   useGetStaffQuery,
   useCreateStaffMutation,
   useGetVehicleTypesQuery,
+  useGetParkingRatesQuery,
   useGetVendorsQuery,
   useCreateParkingPassMutation,
   useGetParkingPassesQuery,

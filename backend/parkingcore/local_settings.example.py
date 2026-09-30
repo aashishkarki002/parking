@@ -26,3 +26,8 @@ EASYMANAGE_API_BASE_URL = 'http://127.0.0.1:3000/api/integrations/parking'
 PARKING_WEBHOOK_SECRET = None
 EASYMANAGE_INTEGRATION_API_KEY = None
 PARKING_READ_API_KEY = None
+
+# Password for noreply@sallyanhouse.com. To test locally without sending
+# real mail, print emails to the runserver console instead:
+# EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+EMAIL_HOST_PASSWORD = None  # put the real password in local_settings.py only

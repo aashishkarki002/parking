@@ -14,6 +14,10 @@ const refreshInstance = axios.create({
   baseURL: baseURL,
 });
 
+// Tenants sign in on their own page, so send them back there, not to the staff login.
+const signedOutHome = () =>
+  window.location.pathname.startsWith('/tenant-portal') ? '/tenant-portal/login' : '/';
+
 let isRefreshing = false;
 let refreshSubscribers: ((newToken: string) => void)[] = [];
 
@@ -144,10 +148,10 @@ axiosInstance.interceptors.response.use(
           import('@/lib/public/store').then(({ store }) =>
             import('@/app/(public)/_login/_redux/slice').then(({ logoutRequest }) => {
               store.dispatch(logoutRequest());
-              window.location.href = '/';
+              window.location.href = signedOutHome();
             })
           ).catch(() => {
-            window.location.href = '/';
+            window.location.href = signedOutHome();
           });
         }
       }

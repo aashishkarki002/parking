@@ -140,6 +140,9 @@ const ManageOperatorsPage = () => {
                         <Badge variant="outline" className="text-[10.5px]">
                           {roleLabel(operator.role)}
                         </Badge>
+                        {operator.vendor_name && (
+                          <span className="mt-0.5 block text-[11px] text-muted-foreground">{operator.vendor_name}</span>
+                        )}
                       </td>
                       <td className="px-3 py-2.5 text-[13px] tabular-nums text-foreground">
                         {operator.phone_no || <span className="text-muted-foreground">—</span>}

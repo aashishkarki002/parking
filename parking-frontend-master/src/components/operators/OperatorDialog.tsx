@@ -19,6 +19,8 @@ import {
   useUpdateOperatorMutation,
 } from '@/app/(public)/(pages)/operators/_redux/api';
 import { OPERATOR_ROLES, type Operator, type OperatorRole } from '@/components/operators/types';
+import { useGetVendorsQuery } from '@/app/(public)/(pages)/home/_redux/api';
+import { ROLE_TENANT } from '@/lib/public/roles';
 
 const selectClassName =
   'h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30';
@@ -35,6 +37,13 @@ const buildSchema = (mode: 'create' | 'edit') =>
       .oneOf(OPERATOR_ROLES.map((r) => r.value))
       .required('Select a role'),
     is_active: yup.boolean().required(),
+    vendor: yup
+      .string()
+      .default('')
+      .when('role', {
+        is: ROLE_TENANT,
+        then: (schema) => schema.required('Select the tenant this login belongs to'),
+      }),
     password:
       mode === 'create'
         ? yup.string().min(8, 'At least 8 characters').required('Password is required')
@@ -57,11 +66,13 @@ const DEFAULTS: FormValues = {
   role: 'pos',
   is_active: true,
   password: '',
+  vendor: '',
 };
 
 export function OperatorDialog({ mode, operator, isSelf, open, onOpenChange }: OperatorDialogProps) {
   const [createOperator, { isLoading: creating }] = useCreateOperatorMutation();
   const [updateOperator, { isLoading: updating }] = useUpdateOperatorMutation();
+  const { data: vendors = [] } = useGetVendorsQuery(undefined, { skip: !open });
 
   const {
     register,
@@ -84,6 +95,7 @@ export function OperatorDialog({ mode, operator, isSelf, open, onOpenChange }: O
         role: operator.role ?? 'pos',
         is_active: operator.is_active,
         password: '',
+        vendor: operator.vendor ? String(operator.vendor) : '',
       });
     } else {
       reset(DEFAULTS);
@@ -99,6 +111,7 @@ export function OperatorDialog({ mode, operator, isSelf, open, onOpenChange }: O
       phone_no: values.phone_no?.trim() || null,
       role: values.role,
       is_active: values.is_active,
+      vendor: values.role === ROLE_TENANT && values.vendor ? Number(values.vendor) : null,
     };
     if (values.password) payload.password = values.password;
 
@@ -158,6 +171,21 @@ export function OperatorDialog({ mode, operator, isSelf, open, onOpenChange }: O
                   : OPERATOR_ROLES.find((r) => r.value === watch('role'))?.hint}
               </p>
             </div>
+
+            {watch('role') === ROLE_TENANT && (
+              <div className="flex flex-col gap-1.5">
+                <label className={labelClassName}>Tenant</label>
+                <select className={selectClassName} {...register('vendor')}>
+                  <option value="">Select a tenant…</option>
+                  {(vendors as { id: number; name: string }[]).map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.name}
+                    </option>
+                  ))}
+                </select>
+                {errors.vendor && <p className="text-[11px] text-destructive">{errors.vendor.message}</p>}
+              </div>
+            )}
 
             <div className="flex flex-col gap-1.5">
               <label className={labelClassName}>

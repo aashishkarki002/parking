@@ -1,6 +1,9 @@
 # management/admin.py
 from datetime import timedelta
+from django import forms
 from django.contrib import admin
+from django.contrib.auth.models import Group
+from django.contrib.auth.password_validation import validate_password
 from django.urls import path, reverse
 from django.utils import timezone
 from django.utils.html import format_html
@@ -8,11 +11,14 @@ from django.db.models import Sum
 from decimal import Decimal
 from rangefilter.filters import DateRangeFilter
 from . import views
+from user_app.models import User
+from user_app.roles import TENANT
 import uuid
 from .models import (
     ParkingConfiguration, PricingPlan, VehicleType,
     Vendor, Staff, Coupon, CouponBatch,
-    ParkingPass, ParkingSession, CardScanLog, TicketStamp, TenantBill, RFIDCard
+    ParkingPass, ParkingSession, CardScanLog, TicketStamp, TenantBill, RFIDCard,
+    Student, StudentRequest,
 )
 
 
@@ -48,6 +54,7 @@ class ParkingAdminSite(admin.AdminSite):
         coupon_models = [m for m in model_admins if m[0].__name__ in ['CouponBatch', 'Coupon', 'ParkingPass']]
         activity_models = [m for m in model_admins if m[0].__name__ in ['ParkingSession', 'CardScanLog', 'TicketStamp', 'TenantBill']]
         user_models = [m for m in model_admins if m[0].__name__ in ['User', 'Group']]
+        student_models = [m for m in model_admins if m[0].__name__ in ['StudentRequest', 'Student']]
 
         # Build custom app list
         custom_app_list = []
@@ -64,6 +71,13 @@ class ParkingAdminSite(admin.AdminSite):
                 'name': 'Tenant Management',
                 'app_label': 'people',
                 'models': [self._build_model_dict(m[0], m[1], request) for m in people_models]
+            })
+
+        if student_models:
+            custom_app_list.append({
+                'name': 'Students',
+                'app_label': 'students',
+                'models': [self._build_model_dict(m[0], m[1], request) for m in student_models]
             })
 
         if coupon_models:
@@ -158,10 +172,119 @@ class VehicleTypeAdmin(BaseAdmin):
 
 
 # People Management
+def portal_user_for(vendor):
+    """The tenant-portal login this vendor's admin page manages: the first
+    account linked to it in the tenant group (normally the only one)."""
+    if not vendor.pk:
+        return None
+    users = [u for u in vendor.portal_users.all() if TENANT in {g.name for g in u.groups.all()}]
+    return min(users, key=lambda u: u.pk) if users else None
+
+
+class VendorAdminForm(forms.ModelForm):
+    """Vendor fields plus the tenant's portal login. The password is only
+    ever written (hashed); leaving it blank keeps the current one."""
+    portal_email = forms.EmailField(label='Login email', required=False)
+    portal_password = forms.CharField(
+        label='Password', required=False, strip=False,
+        widget=forms.PasswordInput(render_value=False, attrs={'autocomplete': 'new-password'}),
+        help_text='Set or reset the password. Leave blank to keep the current one.',
+    )
+    portal_active = forms.BooleanField(
+        label='Login active', required=False, initial=True,
+        help_text='Untick to stop this tenant signing in, without deleting the account.',
+    )
+
+    class Meta:
+        model = Vendor
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.portal_user = portal_user_for(self.instance)
+        if self.portal_user:
+            self.fields['portal_email'].initial = self.portal_user.email
+            self.fields['portal_active'].initial = self.portal_user.is_active
+            self.fields['portal_password'].help_text = (
+                'A password is set. Type a new one only to reset it.')
+
+    def clean(self):
+        cleaned = super().clean()
+        email = (cleaned.get('portal_email') or '').strip().lower()
+        password = cleaned.get('portal_password') or ''
+        cleaned['portal_email'] = email
+
+        if not email:
+            if password:
+                self.add_error('portal_email', 'Enter the login email for this password.')
+            elif self.portal_user:
+                self.add_error('portal_email', 'To turn this login off, untick "Login active" instead.')
+            return cleaned
+
+        other = User.objects.filter(email__iexact=email).exclude(
+            pk=getattr(self.portal_user, 'pk', None)).first()
+        if other:
+            self.add_error('portal_email', 'Another account already uses this email.')
+        if not self.portal_user and not password:
+            self.add_error('portal_password', 'Set a password for the new login.')
+        if password:
+            try:
+                validate_password(password, user=self.portal_user)
+            except forms.ValidationError as exc:
+                self.add_error('portal_password', exc)
+        return cleaned
+
+    def save_portal_login(self, vendor):
+        """Create or update the login. Called after the vendor is saved."""
+        email = self.cleaned_data.get('portal_email')
+        if not email:
+            return
+        password = self.cleaned_data.get('portal_password')
+        user = self.portal_user
+        if user is None:
+            user = User.objects.create_user(email=email, password=password, vendor=vendor)
+        else:
+            user.email = email
+            user.vendor = vendor
+            if password:
+                user.set_password(password)
+        user.is_active = self.cleaned_data.get('portal_active', False)
+        user.save()
+        user.groups.set([Group.objects.get(name=TENANT)])
+
+
 @admin.register(Vendor, site=parking_admin_site)
 class VendorAdmin(BaseAdmin):
-    list_display = ('name', 'location', 'contact_person', 'contact_email', 'stamp_free_minutes')
+    form = VendorAdminForm
+    list_display = ('name', 'location', 'contact_person', 'contact_email', 'stamp_free_minutes',
+                    'student_early_grace_minutes', 'student_late_grace_minutes', 'portal_login')
     search_fields = ('name', 'contact_person', 'location')
+
+    def get_fieldsets(self, request, obj=None):
+        portal = ('portal_email', 'portal_password', 'portal_active')
+        fields = [f for f in super().get_fieldsets(request, obj)[0][1]['fields'] if f not in portal]
+        return [
+            (None, {'fields': fields}),
+            ('Tenant portal login', {
+                'fields': portal,
+                'description': 'The email and password this tenant uses at /tenant-portal/login '
+                               'to send student lists for approval.',
+            }),
+        ]
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).prefetch_related('portal_users')
+
+    @admin.display(description='Portal login')
+    def portal_login(self, obj):
+        user = portal_user_for(obj)
+        if not user:
+            return '—'
+        return user.email if user.is_active else f'{user.email} (disabled)'
+
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        form.save_portal_login(obj)
 
 
 class ParkingPassInline(admin.TabularInline):
@@ -536,3 +659,60 @@ class ParkingSessionAdmin(BaseAdmin):
          'calculated_charge', 'payment_method', 'applied_coupon', 'applied_pass')}),
         ('Notes', {'fields': ('notes',), 'classes': ('collapse',)}),
     )
+
+
+# Students (tenant portal requests; the React back office has the same review screen)
+def _review(request, queryset, review_status, reason=''):
+    return queryset.update(review_status=review_status, reject_reason=reason,
+                           reviewed_by=request.user, reviewed_at=timezone.now())
+
+
+class StudentInline(admin.TabularInline):
+    model = Student
+    extra = 0
+    fields = ('sn', 'name', 'contact_number', 'license_plate', 'vehicle_type', 'batch_start_date',
+              'batch_end_date', 'class_days', 'class_time_from', 'class_time_to', 'is_active',
+              'review_status', 'reject_reason')
+
+
+@admin.register(StudentRequest, site=parking_admin_site)
+class StudentRequestAdmin(BaseAdmin):
+    list_display = ('__str__', 'vendor', 'source', 'student_count', 'status', 'submitted_by')
+    list_filter = ('vendor', 'source', ('submitted_at', DateRangeFilter))
+    readonly_fields = ('submitted_at', 'submitted_by')
+    inlines = [StudentInline]
+    actions = ['approve_all', 'reject_all']
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('vendor', 'submitted_by').prefetch_related('students')
+
+    @admin.display(description='Students')
+    def student_count(self, obj):
+        return len(obj.students.all())
+
+    @admin.action(description='Approve every student in the selected requests')
+    def approve_all(self, request, queryset):
+        count = _review(request, Student.objects.filter(request__in=queryset), Student.APPROVED)
+        self.message_user(request, f'{count} student(s) approved.')
+
+    @admin.action(description='Reject every student in the selected requests')
+    def reject_all(self, request, queryset):
+        count = _review(request, Student.objects.filter(request__in=queryset), Student.REJECTED)
+        self.message_user(request, f'{count} student(s) rejected.')
+
+
+@admin.register(Student, site=parking_admin_site)
+class StudentAdmin(BaseAdmin):
+    list_display = ('name', 'license_plate', 'vendor', 'batch_end_date', 'is_active', 'review_status')
+    list_filter = ('review_status', 'is_active', 'vendor', ('batch_end_date', DateRangeFilter))
+    search_fields = ('name', 'license_plate', 'contact_number')
+    readonly_fields = ('card_code', 'reviewed_by', 'reviewed_at', 'created_at')
+    actions = ['approve', 'reject']
+
+    @admin.action(description='Approve selected students')
+    def approve(self, request, queryset):
+        self.message_user(request, f'{_review(request, queryset, Student.APPROVED)} student(s) approved.')
+
+    @admin.action(description='Reject selected students')
+    def reject(self, request, queryset):
+        self.message_user(request, f'{_review(request, queryset, Student.REJECTED)} student(s) rejected.')

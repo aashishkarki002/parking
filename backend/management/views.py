@@ -9,6 +9,7 @@ from rest_framework.views import APIView
 from django.core.exceptions import ValidationError
 from django.db import transaction, IntegrityError
 from django.db.models import Case, IntegerField, Q, Value, When
+from django.db.models.functions import Replace, Upper
 from django.shortcuts import get_object_or_404, render
 from django.views import View
 from django.http import HttpResponse
@@ -63,7 +64,8 @@ def CSS(*args, **kwargs):
 
 from .models import (
     ParkingConfiguration, PricingPlan, VehicleType, Vendor, Staff, Coupon,
-    ParkingPass, ParkingSession, CouponBatch, CardScanLog, WebhookEventLog, TicketStamp, TenantBill, RFIDCard  # <-- ADD CouponBatch to imports
+    ParkingPass, ParkingSession, CouponBatch, CardScanLog, WebhookEventLog, TicketStamp, TenantBill, RFIDCard,  # <-- ADD CouponBatch to imports
+    Student, normalize_plate,
 )
 from .serializers import (
     ParkingConfigurationSerializer, PricingPlanSerializer, VehicleTypeSerializer,
@@ -626,7 +628,9 @@ class ParkingSessionViewSet(viewsets.ModelViewSet):
         # created before pass-coverage got its own status) waived at entry.
         # Nothing left to calculate, so return the existing data instead of
         # 400ing on a re-scan at exit.
-        if session.status in ('COVERED_BY_PASS', 'WAIVED'):
+        # A lost ticket was already closed at its fine (mark-lost); rescanning
+        # it must not move exit_time or re-price it.
+        if session.status in ('COVERED_BY_PASS', 'WAIVED') or session.lost_ticket:
             serializer = self.get_serializer(session)
             return Response(serializer.data)
 
@@ -644,6 +648,11 @@ class ParkingSessionViewSet(viewsets.ModelViewSet):
                 session.applied_pass = active_pass
                 session.registered_staff_member = staff
                 session.vehicle_type = staff.vehicle_type  # Update vehicle type from staff record
+
+        # A student approved after this ticket was issued still gets their
+        # free time: match by plate again now, as save() did at entry.
+        if session.license_plate and not session.student_id and not session.registered_staff_member_id:
+            session.student = Student.active_for_plate(session.license_plate, at=session.entry_time)
 
         # Proceed with normal calculation if no active subscription
         if session.status not in ['ACTIVE', 'COMPLETED', 'STAMPED']:
@@ -702,6 +711,36 @@ class ParkingSessionViewSet(viewsets.ModelViewSet):
         except ValidationError as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
+        serializer = self.get_serializer(session)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['get'], url_path='open-lookup')
+    def open_lookup(self, request):
+        """
+        Unpaid sessions still open at the gate, matched by vehicle number or
+        ticket number — how the POS finds a lost ticket to close (mark-lost).
+        Spaces and case are ignored, so '8342' finds 'BA 1 PA 8342'.
+        """
+        q = normalize_plate(request.query_params.get('q'))
+        if len(q) < 2:
+            return Response([])
+        sessions = (
+            self.get_queryset()
+            .filter(status__in=['ACTIVE', 'COMPLETED', 'STAMPED'], lost_ticket=False, auto_closed=False)
+            .annotate(plate_key=Replace(Upper('license_plate'), Value(' '), Value('')))
+            .filter(Q(plate_key__contains=q) | Q(ticket_number__icontains=q))
+            .order_by('-entry_time')[:20]
+        )
+        return Response(self.get_serializer(sessions, many=True).data)
+
+    @action(detail=True, methods=['post'], url_path='mark-lost')
+    def mark_lost(self, request, ticket_number=None):
+        session = self.get_object()
+        try:
+            session.mark_lost()
+        except ValidationError as e:
+            return Response({'error': e.messages[0]}, status=status.HTTP_400_BAD_REQUEST)
+        session.save()
         serializer = self.get_serializer(session)
         return Response(serializer.data)
 
@@ -1105,6 +1144,35 @@ def rfid_lookup(request):
     if not uid:
         return Response({'error': 'uid is required'}, status=status.HTTP_400_BAD_REQUEST)
     return Response(rfid.lookup(uid))
+
+
+@api_view(['GET'])
+@permission_classes([IsPOSOrAbove])
+def parking_rates(request):
+    """
+    What the POS rate card shows: each vehicle type's pricing plan plus the
+    night window, so it can show the night rate between night_start and
+    night_end. Read-only — the POS can't read /configuration/ or
+    /pricing-plans/ (admin/superadmin only).
+    """
+    config = ParkingConfiguration.get_solo()
+    vehicle_types = VehicleType.objects.select_related('pricing_plan').order_by('id')
+    return Response({
+        'currency_symbol': config.currency_symbol,
+        'time_zone': settings.TIME_ZONE,
+        'night_pricing_enabled': config.night_pricing_enabled,
+        'night_start': config.night_start,
+        'night_end': config.night_end,
+        'night_morning_grace_minutes': config.night_morning_grace_minutes,
+        'night_evening_grace_minutes': config.night_evening_grace_minutes,
+        'vehicle_types': [{
+            'id': vt.id,
+            'name': vt.name,
+            'category': vt.category,
+            'free_duration_minutes': vt.free_duration_minutes,
+            'pricing_plan': PricingPlanSerializer(vt.pricing_plan).data if vt.pricing_plan else None,
+        } for vt in vehicle_types],
+    })
 
 
 # --- Global search (⌘K palette) -------------------------------------------

@@ -181,7 +181,7 @@ const PricingPlansPage = () => {
 
           {configData && (
             <NightPricingCard
-              key={`${configData.night_pricing_enabled}-${configData.night_start}-${configData.night_end}`}
+              key={`${configData.night_pricing_enabled}-${configData.night_start}-${configData.night_end}-${configData.night_morning_grace_minutes}-${configData.night_evening_grace_minutes}`}
               config={configData}
             />
           )}

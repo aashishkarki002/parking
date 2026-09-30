@@ -7,10 +7,11 @@ to populate that screen.
 admin: full back-office access — pricing, vehicle types, vendors, staff,
 coupons, passes, sessions — but not system-wide configuration.
 superadmin: everything, including system-wide configuration.
+tenant: the tenant portal only — its own student requests (User.vendor).
 """
 from rest_framework.permissions import SAFE_METHODS, BasePermission
 
-from user_app.roles import ADMIN, POS, SUPERADMIN, user_has_role
+from user_app.roles import ADMIN, POS, SUPERADMIN, is_tenant_account, user_has_role
 
 
 class IsSuperAdmin(BasePermission):
@@ -33,3 +34,10 @@ class IsPOSReadOnlyOrAdminAbove(BasePermission):
         if request.method in SAFE_METHODS:
             return user_has_role(request.user, POS, ADMIN, SUPERADMIN)
         return user_has_role(request.user, ADMIN, SUPERADMIN)
+
+
+class IsTenant(BasePermission):
+    """A tenant-portal login (see user_app.roles.is_tenant_account). Every
+    tenant endpoint is scoped to request.user.vendor."""
+    def has_permission(self, request, view):
+        return is_tenant_account(request.user)

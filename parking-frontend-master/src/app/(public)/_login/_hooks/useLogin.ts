@@ -19,6 +19,7 @@ import {
 import { loginSelector } from '@/app/(public)/_login/_redux/selector';
 import { loginSuccess } from '@/app/(public)/_login/_redux/slice';
 import type { LoginProps } from '@/app/(public)/_login/_redux/types';
+import { postLoginRouteForUser } from '@/lib/public/roles';
 
 export const useLogin = (redirectUrl: string) => {
   const dispatch = useAppDispatch();
@@ -63,6 +64,8 @@ export const useLogin = (redirectUrl: string) => {
             persona: data?.persona,
             password: data?.password,
             redirectUrl: VERIFY_ACCOUNT,
+            // Staff page: the backend sends tenant accounts to their own login.
+            portal: 'staff',
           },
         }).unwrap();
         if (response?.status === 'success') {
@@ -74,7 +77,7 @@ export const useLogin = (redirectUrl: string) => {
             if (redirectToPage && redirectUrl !== '') {
               navigate(redirectUrl);
             } else {
-              navigate('/home');
+              navigate(postLoginRouteForUser(response));
             }
           }
           dispatch(closeModal());

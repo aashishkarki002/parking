@@ -5,8 +5,8 @@ import ApprovalIcon from '@mui/icons-material/Approval';
 import DriveEtaIcon from '@mui/icons-material/DriveEta';
 import LocalParkingIcon from '@mui/icons-material/LocalParking';
 import QrCodeScannerIcon from '@mui/icons-material/QrCodeScanner';
+import ReportProblemOutlinedIcon from '@mui/icons-material/ReportProblemOutlined';
 import TwoWheelerIcon from '@mui/icons-material/TwoWheeler';
-import WifiOffIcon from '@mui/icons-material/WifiOff';
 import {
   Autocomplete,
   Box,
@@ -36,7 +36,8 @@ import {
   useGetVehicleTypesQuery,
   useGetVendorsQuery,
   useLazyGetSessionByTicketQuery,
-  useLazySearchStaffQuery,
+  useLazyOpenSessionLookupQuery,
+  useMarkLostTicketMutation,
   usePaymentMethodMutation,
   usePrintBillMutation,
   useRfidForceEntryMutation,
@@ -45,9 +46,13 @@ import {
   useTenantCardConfirmMutation,
   useTenantCardScanMutation,
 } from '@/app/(public)/(pages)/home/_redux/api';
+import { formatDate, formatTime } from '@/functions/dateFn';
 import useRfidReader from '@/hooks/common/useRfidReader';
+import { useStudentCardScanMutation } from '@/components/students/api';
+import type { SessionStudent, SessionStudentBilling } from '@/components/students/types';
 import GenerateBill from './GenerateBill';
 import GenerateTicket from './PrintTicket';
+import ParkingRatesPanel from './ParkingRatesPanel';
 import RfidTapBanner, { type RfidTapResult } from './RfidTapBanner';
 import styles from './styles.module.css';
 
@@ -61,6 +66,19 @@ import styles from './styles.module.css';
 // before the request goes out.
 const TENANT_CARD_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(:[^:]+:[^:]+|#\d{6})?$/i;
+
+// Student QR cards print "ST-<uuid>" (Student.card_payload on the backend).
+// Accepted in either scan field: the card toggles the student in/out.
+const STUDENT_CARD_PATTERN = /^ST-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// A ticket whose vehicle number belongs to an approved student: a short,
+// distinctly coloured heads-up. Whether their free time applied is spelled
+// out in the Current Transaction panel (studentBilling), not here.
+const announceStudent = (student: SessionStudent, extra = '') =>
+  toast(`🎓 Student: ${student.name} · ${student.vendor} (${student.license_plate})${extra}`, {
+    autoClose: 6000,
+    style: { background: '#6a1b9a', color: '#fff', fontWeight: 600 },
+  });
 
 interface VendorOption {
   id: number;
@@ -112,6 +130,15 @@ const isNoReceiptTenantExit = (
   status?: string,
   registeredStaffMember?: string | null
 ) => charge <= 0 && (status === 'COVERED_BY_PASS' || !!registeredStaffMember);
+
+// An unpaid parked session from sessions/open-lookup (lost ticket search).
+interface OpenSession {
+  id: string;
+  ticket_number: string;
+  license_plate: string | null;
+  vehicle_type: string;
+  entry_time: string;
+}
 
 interface RfidTapResponse {
   status: string;
@@ -199,6 +226,9 @@ const Options = () => {
     registeredStaffMember?: string | null;
     stamps?: { vendor: string }[];
     tenantBill?: { vendor: string; overage_minutes: number; amount: string } | null;
+    student?: SessionStudent | null;
+    studentBilling?: SessionStudentBilling | null;
+    lostTicket?: boolean;
   } | null>(null);
   const [parkingPassData, setParkingPassData] = useState<{
     action: string;
@@ -221,24 +251,16 @@ const Options = () => {
   } | null>(null);
   const [confirmingCardScan, setConfirmingCardScan] = useState(false);
 
-  // Manual fallback for offline mode: the tenant's phone shows a rotating
-  // 6-digit code with no network needed to generate it (see Staff.verify_offline_code
-  // on the backend), but there's no realistic way for an operator to scan/type a
-  // full "uuid#code" string. Instead: look the tenant up by name/plate, then just
-  // type the code they read aloud.
-  const [offlineDialogOpen, setOfflineDialogOpen] = useState(false);
-  const [offlineSearchQuery, setOfflineSearchQuery] = useState('');
-  const [offlineSelectedStaff, setOfflineSelectedStaff] = useState<{
-    id: number;
-    name: string;
-    company: string | null;
-    license_plate: string;
-    vehicle_type: string | null;
-    card_code: string;
-  } | null>(null);
-  const [offlineCode, setOfflineCode] = useState('');
-  const [offlineSubmitting, setOfflineSubmitting] = useState(false);
-  const [triggerSearchStaff, searchStaffResult] = useLazySearchStaffQuery();
+  // Lost ticket: the operator finds the parked car by vehicle number (or
+  // ticket number, if the customer has it), the backend closes it at the
+  // flat fine (ParkingSession.mark_lost), and the normal Cash/Online bill
+  // takes over.
+  const [lostDialogOpen, setLostDialogOpen] = useState(false);
+  const [lostQuery, setLostQuery] = useState('');
+  const [lostSelected, setLostSelected] = useState<OpenSession | null>(null);
+  const [lostSubmitting, setLostSubmitting] = useState(false);
+  const [triggerOpenLookup, openLookupResult] = useLazyOpenSessionLookupQuery();
+  const lostMatches: OpenSession[] = lostQuery.trim().length >= 2 ? (openLookupResult.data ?? []) : [];
 
   const [ticketNo, setTicketNo] = useState('');
   const [scanning, setScanning] = useState(false);
@@ -294,6 +316,7 @@ const Options = () => {
   const [scanQr] = useScanCodeMutation();
   const [printBill] = usePrintBillMutation();
   const [postPayment] = usePaymentMethodMutation();
+  const [postMarkLost] = useMarkLostTicketMutation();
   const [postCoupon] = useApplyCouponMutation();
   const [scanTenantCard] = useTenantCardScanMutation();
   const [confirmTenantCard] = useTenantCardConfirmMutation();
@@ -301,6 +324,7 @@ const Options = () => {
   const [postStamp] = useApplyStampMutation();
   const [postRfidTap] = useRfidTapMutation();
   const [postRfidForceEntry, { isLoading: rfidCorrecting }] = useRfidForceEntryMutation();
+  const [postStudentCard] = useStudentCardScanMutation();
 
   // RFID reader at the booth: always on, types the card UID + Enter. One
   // tap toggles the tenant in/out — no button to press first. See
@@ -369,6 +393,14 @@ const Options = () => {
   const submitParkingPassScan = async () => {
     const scannedValue = parkingPassInputRef.current?.value?.trim() ?? '';
     if (!beginScanSubmit(scannedValue)) return;
+
+    if (STUDENT_CARD_PATTERN.test(scannedValue)) {
+      if (parkingPassInputRef.current) parkingPassInputRef.current.value = '';
+      parkingPassInputRef?.current?.blur();
+      await handleStudentCard(scannedValue);
+      scanSubmitting.current = false;
+      return;
+    }
 
     if (!TENANT_CARD_PATTERN.test(scannedValue)) {
       toast.error('That looks like a ticket, not a tenant card. Use the ticket scanner instead.');
@@ -451,63 +483,6 @@ const Options = () => {
     setPendingCardScan(null);
   };
 
-  const handleOpenOfflineDialog = () => {
-    resetTicketData();
-    setOfflineDialogOpen(true);
-    setOfflineSearchQuery('');
-    setOfflineSelectedStaff(null);
-    setOfflineCode('');
-  };
-
-  const handleCloseOfflineDialog = () => {
-    setOfflineDialogOpen(false);
-    setOfflineSearchQuery('');
-    setOfflineSelectedStaff(null);
-    setOfflineCode('');
-  };
-
-  // Debounce the lookup so every keystroke doesn't fire a request.
-  useEffect(() => {
-    if (offlineSelectedStaff) return;
-    const trimmed = offlineSearchQuery.trim();
-    if (trimmed.length < 2) return;
-    const timer = setTimeout(() => {
-      triggerSearchStaff(trimmed);
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [offlineSearchQuery, offlineSelectedStaff, triggerSearchStaff]);
-
-  const submitOfflineCode = async () => {
-    if (!offlineSelectedStaff || offlineCode.trim().length !== 6) return;
-    setOfflineSubmitting(true);
-
-    try {
-      const res = await scanTenantCard({
-        card_code: `${offlineSelectedStaff.card_code}#${offlineCode.trim()}`,
-      }).unwrap();
-      if (res) {
-        setPendingCardScan({
-          cardCode: `${offlineSelectedStaff.card_code}#${offlineCode.trim()}`,
-          action: res.action,
-          staffName: res.staff?.name ?? offlineSelectedStaff.name,
-          company: res.staff?.company ?? offlineSelectedStaff.company,
-          licensePlate: res.staff?.license_plate ?? offlineSelectedStaff.license_plate,
-          vehicleType: res.staff?.vehicle_type ?? offlineSelectedStaff.vehicle_type,
-        });
-        handleCloseOfflineDialog();
-      }
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error('Error submitting offline code:', err);
-      toast.error(
-        (err as { data?: { error?: string } })?.data?.error ||
-          'Could not verify this code. Confirm it with the tenant and try again.'
-      );
-    } finally {
-      setOfflineSubmitting(false);
-    }
-  };
-
   // Maps a ParkingSessionSerializer payload onto the bill panel's state.
   // Shared by ticket scans and charged tenant exits (RFID / tenant card),
   // so an over-allowance tenant gets the exact same bill as a visitor.
@@ -529,6 +504,9 @@ const Options = () => {
     registeredStaffMember: res.registered_staff_member || null,
     stamps: res.stamps || [],
     tenantBill: res.tenant_bill || null,
+    student: res.student || null,
+    studentBilling: res.student_billing || null,
+    lostTicket: !!res.lost_ticket,
   });
 
   // A tenant / monthly parker who went past the free allowance owes money
@@ -548,9 +526,93 @@ const Options = () => {
     setBillData(sessionToBillData(session));
   };
 
+  const handleOpenLostDialog = () => {
+    resetTicketData();
+    setLostQuery('');
+    setLostSelected(null);
+    setLostDialogOpen(true);
+  };
+
+  const handleCloseLostDialog = () => {
+    setLostDialogOpen(false);
+    setLostQuery('');
+    setLostSelected(null);
+  };
+
+  // Debounce the lookup so every keystroke doesn't fire a request.
+  useEffect(() => {
+    if (!lostDialogOpen || lostSelected) return;
+    const q = lostQuery.trim();
+    if (q.length < 2) return;
+    const timer = setTimeout(() => {
+      triggerOpenLookup(q);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [lostDialogOpen, lostQuery, lostSelected, triggerOpenLookup]);
+
+  // Closes the ticket at the fine, then hands over to the regular bill:
+  // Cash/Online -> mark-paid -> printed receipt (GenerateBill, lostTicket).
+  const submitLostTicket = async () => {
+    if (!lostSelected) return;
+    setLostSubmitting(true);
+    try {
+      const res = await postMarkLost({ ticketNo: lostSelected.ticket_number }).unwrap();
+      openTenantOverageBill(res);
+      handleCloseLostDialog();
+    } catch {
+      // 400s (already paid/closed) are toasted by the axios interceptor
+      // with the backend's reason.
+    } finally {
+      setLostSubmitting(false);
+    }
+  };
+
+  // Student QR card: the backend decides entry vs exit (see student_card_scan).
+  // A charged exit opens the normal bill; everything else is a toast plus
+  // the same in/out panel tenant cards use.
+  const handleStudentCard = async (code: string) => {
+    setScanning(true);
+    try {
+      const res = await postStudentCard({ code }).unwrap();
+      if (res.action === 'DUPLICATE') {
+        toast.info('Same student card scanned twice — ignored.', { autoClose: 1500, hideProgressBar: true });
+        return;
+      }
+      const session = res.session;
+      if (res.action === 'EXIT' && Number(session?.calculated_charge ?? 0) > 0) {
+        announceStudent(res.student, ' · EXIT');
+        openTenantOverageBill(session);
+        return;
+      }
+      announceStudent(res.student, ` · ${res.action}`);
+      resetTicketData();
+      setParkingPassData({
+        action: res.action,
+        ticketNo: session.ticket_number,
+        entryTime: session.entry_time,
+        exitTime: session.exit_time,
+        message: res.action === 'EXIT' ? 'Student exit — free' : 'Student entry recorded',
+      });
+    } catch (err) {
+      // 400s (expired batch, inactive…) are already toasted by the axios
+      // interceptor with the backend's reason.
+      if ((err as { status?: number })?.status === 404) toast.error('Unknown student card.');
+    } finally {
+      setScanning(false);
+    }
+  };
+
   const submitBillScan = async () => {
     const scannedTicket = inputRef.current?.value?.trim() ?? '';
     if (!beginScanSubmit(scannedTicket)) return;
+
+    if (STUDENT_CARD_PATTERN.test(scannedTicket)) {
+      if (inputRef.current) inputRef.current.value = '';
+      inputRef?.current?.blur();
+      await handleStudentCard(scannedTicket);
+      scanSubmitting.current = false;
+      return;
+    }
 
     if (TENANT_CARD_PATTERN.test(scannedTicket)) {
       toast.error('That looks like a tenant card, not a ticket. Use the Parking Pass button instead.');
@@ -571,6 +633,7 @@ const Options = () => {
       if (res) {
         const respData = sessionToBillData(res, bikeData?.vehicleNo || carData?.vehicleNo || '');
         setBillData(respData);
+        if (respData.student) announceStudent(respData.student);
         setBikeData(null);
         setCarData(null);
         if (
@@ -1227,12 +1290,12 @@ const Options = () => {
 
           <Box sx={{ textAlign: 'center', marginTop: 2 }} className={styles.nonPrintable}>
             <Button
-              startIcon={<WifiOffIcon />}
+              startIcon={<ReportProblemOutlinedIcon />}
               size="small"
-              onClick={handleOpenOfflineDialog}
+              onClick={handleOpenLostDialog}
               sx={{ color: '#5b554e', textTransform: 'none' }}
             >
-              Tenant has no signal? Enter offline code manually
+              Customer lost their ticket? Mark as lost
             </Button>
           </Box>
         </Box>
@@ -1252,38 +1315,7 @@ const Options = () => {
             elevation={3}
             sx={{ padding: 3, height: '100%', display: 'flex', flexDirection: 'column' }}
           >
-            <Box sx={{ marginBottom: 3 }}>
-              <Typography
-                variant="subtitle1"
-                gutterBottom
-                sx={{ fontWeight: 'bold', color: '#555' }}
-              >
-                Parking Rates
-              </Typography>
-              <Box
-                sx={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  fontSize: '0.8rem',
-                  color: '#666',
-                  marginBottom: 1,
-                }}
-              >
-                <span>Two-Wheelers:</span>
-                <span>₹30/hour</span>
-              </Box>
-              <Box
-                sx={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  fontSize: '0.8rem',
-                  color: '#666',
-                }}
-              >
-                <span>Four-Wheelers:</span>
-                <span>₹60/hour</span>
-              </Box>
-            </Box>
+            <ParkingRatesPanel />
 
             {pendingCardScan && (
               <Box sx={{ flexGrow: 1 }}>
@@ -1688,7 +1720,16 @@ const Options = () => {
                         <Typography variant="caption">{billData.ticketNo}</Typography>
                       </Box>
 
-                      {billData.registeredStaffMember && (
+                      {billData.lostTicket && (
+                        <Typography
+                          variant="caption"
+                          sx={{ display: 'block', color: '#d32f2f', fontWeight: 'bold', marginBottom: 1 }}
+                        >
+                          Lost ticket — flat fine instead of the parking fee
+                        </Typography>
+                      )}
+
+                      {billData.registeredStaffMember && !billData.lostTicket && (
                         <Box
                           sx={{ display: 'flex', justifyContent: 'space-between', marginBottom: 1 }}
                         >
@@ -1697,6 +1738,42 @@ const Options = () => {
                           </Typography>
                           <Typography variant="caption">
                             {billData.registeredStaffMember} · over free allowance
+                          </Typography>
+                        </Box>
+                      )}
+
+                      {billData.student && !billData.lostTicket && (
+                        <Box
+                          sx={{
+                            marginBottom: 1,
+                            padding: '6px 10px',
+                            borderRadius: 1,
+                            border: '1px solid',
+                            borderColor: billData.studentBilling?.applied ? '#c8e6c9' : '#ffe0b2',
+                            backgroundColor: billData.studentBilling?.applied ? '#f1f8e9' : '#fff3e0',
+                          }}
+                        >
+                          <Typography variant="caption" sx={{ display: 'block', fontWeight: 'bold', color: '#6a1b9a' }}>
+                            🎓 Student: {billData.student.name} ({billData.student.license_plate})
+                          </Typography>
+                          <Typography variant="caption" sx={{ display: 'block', color: '#555' }}>
+                            {billData.student.vendor} · batch ends {billData.student.batch_end_date}
+                          </Typography>
+                          {billData.studentBilling && (
+                            <Typography variant="caption" sx={{ display: 'block', color: '#333', marginTop: 0.5 }}>
+                              {billData.studentBilling.message}
+                            </Typography>
+                          )}
+                          <Typography
+                            variant="caption"
+                            sx={{
+                              display: 'block',
+                              fontWeight: 'bold',
+                              marginTop: 0.5,
+                              color: billData.charge > 0 ? '#d32f2f' : '#2e7d32',
+                            }}
+                          >
+                            {billData.charge > 0 ? `₹${billData.charge} to collect.` : 'Nothing to collect.'}
                           </Typography>
                         </Box>
                       )}
@@ -1714,13 +1791,14 @@ const Options = () => {
                         }}
                       >
                         <Typography variant="body2" sx={{ fontWeight: 'bold', color: '#555' }}>
-                          CHARGE AMOUNT:
+                          {billData.lostTicket ? 'LOST TICKET FINE:' : 'CHARGE AMOUNT:'}
                         </Typography>
                         <Typography variant="h6" sx={{ fontWeight: 'bold', color: '#d32f2f' }}>
                           ₹{billData.charge}
                         </Typography>
                       </Box>
 
+                      {!billData.lostTicket && (
                       <Box sx={{ marginBottom: 2 }}>
                         <Typography
                           variant="caption"
@@ -1777,6 +1855,7 @@ const Options = () => {
                           </Button>
                         </Box>
                       </Box>
+                      )}
 
                       <Box sx={{ display: 'flex', gap: 1.5 }}>
                         <Button
@@ -1835,7 +1914,8 @@ const Options = () => {
                     <Typography variant="caption" sx={{ display: 'block', mb: 2 }}>
                       {billData.charge > 0 ? (
                         <>
-                          Amount Paid: <strong>₹{billData.charge}</strong>
+                          {billData.lostTicket ? 'Lost Ticket Fine Paid' : 'Amount Paid'}:{' '}
+                          <strong>₹{billData.charge}</strong>
                         </>
                       ) : (
                         <strong>{getFreeExitLabel(billData.status, billData.stamps, billData.tenantBill)}</strong>
@@ -1895,6 +1975,8 @@ const Options = () => {
           status={billData.status}
           stamps={billData.stamps}
           tenantBill={billData.tenantBill}
+          studentName={billData.student?.name}
+          lostTicket={billData.lostTicket}
           onComplete={() => {
             setBillGenerated(true);
             setProceedToGenerateBill(false);
@@ -1948,128 +2030,104 @@ const Options = () => {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={offlineDialogOpen} onClose={handleCloseOfflineDialog} maxWidth="xs" fullWidth>
-        <DialogTitle>Offline Tenant Code</DialogTitle>
+      <Dialog open={lostDialogOpen} onClose={handleCloseLostDialog} maxWidth="xs" fullWidth>
+        <DialogTitle>Lost Ticket</DialogTitle>
         <DialogContent>
-          {!offlineSelectedStaff && (
+          {!lostSelected && (
             <>
+              <Typography variant="body2" sx={{ color: '#555', marginBottom: 1 }}>
+                Search the parked vehicle by its number (or the ticket number if the customer has
+                it), then pick it from the list.
+              </Typography>
               <TextField
                 autoFocus
                 margin="dense"
-                label="Search by name or plate"
+                label="Vehicle number or ticket number"
                 fullWidth
                 variant="outlined"
-                value={offlineSearchQuery}
-                onChange={(e) => setOfflineSearchQuery(e.target.value)}
-                placeholder="e.g., Ramesh or PA03AB1234"
+                value={lostQuery}
+                onChange={(e) => setLostQuery(e.target.value.toUpperCase())}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && lostMatches.length === 1) {
+                    e.preventDefault();
+                    setLostSelected(lostMatches[0]);
+                  }
+                }}
+                placeholder="e.g., BA 1 PA 8342 or 8342"
               />
-              {searchStaffResult.isFetching && (
+              {openLookupResult.isFetching && (
                 <Box sx={{ marginTop: 1 }}>
                   {Array.from({ length: 3 }).map((_, i) => (
                     <Skeleton key={i} variant="text" height={32} />
                   ))}
                 </Box>
               )}
-              {!searchStaffResult.isFetching &&
-                offlineSearchQuery.trim().length >= 2 &&
-                (searchStaffResult.data?.length ?? 0) === 0 && (
+              {!openLookupResult.isFetching &&
+                lostQuery.trim().length >= 2 &&
+                openLookupResult.isSuccess &&
+                lostMatches.length === 0 && (
                   <Typography variant="caption" sx={{ color: '#888', marginTop: 1, display: 'block' }}>
-                    No tenants found.
+                    No parked vehicle found. Check the number, or try the ticket number.
                   </Typography>
                 )}
-              {(searchStaffResult.data?.length ?? 0) > 0 && (
-                <List sx={{ maxHeight: 240, overflowY: 'auto', marginTop: 1 }}>
-                  {searchStaffResult.data.map(
-                    (staff: {
-                      id: number;
-                      name: string;
-                      company: string | null;
-                      license_plate: string;
-                      vehicle_type: string | null;
-                      card_code: string;
-                    }) => (
-                      <ListItemButton
-                        key={staff.id}
-                        onClick={() => {
-                          setOfflineSelectedStaff(staff);
-                          setOfflineCode('');
-                        }}
-                      >
-                        <ListItemText
-                          primary={`${staff.name} (${staff.license_plate})`}
-                          secondary={staff.company ?? ''}
-                        />
-                      </ListItemButton>
-                    )
-                  )}
+              {!openLookupResult.isFetching && lostMatches.length > 0 && (
+                <List sx={{ maxHeight: 260, overflowY: 'auto', marginTop: 1 }}>
+                  {lostMatches.map((s) => (
+                    <ListItemButton key={s.id} onClick={() => setLostSelected(s)}>
+                      <ListItemText
+                        primary={`${s.license_plate || 'No vehicle number'} · ${s.vehicle_type}`}
+                        secondary={`${s.ticket_number} · in since ${formatDate(s.entry_time)} ${formatTime(s.entry_time)}`}
+                      />
+                    </ListItemButton>
+                  ))}
                 </List>
               )}
             </>
           )}
 
-          {offlineSelectedStaff && (
-            <>
-              <Box
-                sx={{
-                  marginBottom: 2,
-                  padding: 1.5,
-                  backgroundColor: '#f5f5f5',
-                  borderRadius: 1,
-                  border: '1px solid #e0e0e0',
-                }}
+          {lostSelected && (
+            <Box
+              sx={{
+                padding: 1.5,
+                backgroundColor: '#f5f5f5',
+                borderRadius: 1,
+                border: '1px solid #e0e0e0',
+              }}
+            >
+              <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
+                {lostSelected.license_plate || 'No vehicle number'} · {lostSelected.vehicle_type}
+              </Typography>
+              <Typography variant="caption" sx={{ color: '#666', display: 'block' }}>
+                Ticket {lostSelected.ticket_number} · in since {formatDate(lostSelected.entry_time)}{' '}
+                {formatTime(lostSelected.entry_time)}
+              </Typography>
+              <Typography variant="caption" sx={{ color: '#d32f2f', display: 'block', marginTop: 1 }}>
+                This closes the session now and charges the lost ticket fine instead of the parking
+                fee.
+              </Typography>
+              <Button
+                size="small"
+                onClick={() => setLostSelected(null)}
+                disabled={lostSubmitting}
+                sx={{ display: 'block', marginTop: 0.5, fontSize: '0.7rem', textTransform: 'none' }}
               >
-                <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
-                  {offlineSelectedStaff.name}
-                </Typography>
-                <Typography variant="caption" sx={{ color: '#666' }}>
-                  {offlineSelectedStaff.license_plate}
-                  {offlineSelectedStaff.company ? ` — ${offlineSelectedStaff.company}` : ''}
-                </Typography>
-                <Button
-                  size="small"
-                  onClick={() => {
-                    setOfflineSelectedStaff(null);
-                    setOfflineCode('');
-                  }}
-                  sx={{ display: 'block', marginTop: 0.5, fontSize: '0.7rem', textTransform: 'none' }}
-                >
-                  Not them? Search again
-                </Button>
-              </Box>
-              <TextField
-                autoFocus
-                margin="dense"
-                label="6-digit code from tenant's phone"
-                fullWidth
-                variant="outlined"
-                value={offlineCode}
-                onChange={(e) => setOfflineCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    submitOfflineCode();
-                  }
-                }}
-                placeholder="123456"
-                inputProps={{ inputMode: 'numeric', style: { letterSpacing: 4, fontSize: '1.2rem' } }}
-              />
-            </>
+                Not this one? Search again
+              </Button>
+            </Box>
           )}
         </DialogContent>
         <DialogActions sx={{ padding: '16px 24px' }}>
-          <Button onClick={handleCloseOfflineDialog} disabled={offlineSubmitting}>
+          <Button onClick={handleCloseLostDialog} disabled={lostSubmitting}>
             Cancel
           </Button>
-          {offlineSelectedStaff && (
-            <Button
-              onClick={submitOfflineCode}
-              variant="contained"
-              color="primary"
-              disabled={offlineSubmitting || offlineCode.trim().length !== 6}
-            >
-              {offlineSubmitting ? 'Checking...' : 'Verify'}
-            </Button>
-          )}
+          <Button
+            onClick={submitLostTicket}
+            variant="contained"
+            color="error"
+            disabled={lostSubmitting || !lostSelected}
+          >
+            {lostSubmitting ? 'Closing...' : 'Mark as lost'}
+          </Button>
         </DialogActions>
       </Dialog>
     </>

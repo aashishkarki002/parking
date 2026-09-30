@@ -33,6 +33,10 @@ export interface NightPricingConfig {
   night_pricing_enabled: boolean;
   night_start: string; // "HH:MM:SS"
   night_end: string;
+  // Registered vehicles only: arriving this many minutes before night_end,
+  // or leaving this many after night_start, isn't billed for those minutes.
+  night_morning_grace_minutes: number;
+  night_evening_grace_minutes: number;
 }
 
 // "22:00:00" -> "10 PM", "06:30:00" -> "6:30 AM"
@@ -48,6 +52,32 @@ export const nightWindowLabel = (config: NightPricingConfig) =>
   `${formatClock(config.night_start)}–${formatClock(config.night_end)}`;
 
 export const hasNightRate = (plan: PricingPlan) => Number(plan.night_rate_per_hour ?? 0) > 0;
+
+// Minutes since midnight of `now` in `timeZone` (the backend's TIME_ZONE), so
+// a screen agrees with billing even if the machine's own zone is off.
+function minutesOfDay(now: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(now);
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
+  return get('hour') * 60 + get('minute');
+}
+
+const clockMinutes = (value: string) => {
+  const [h, m] = value.split(':').map(Number);
+  return h * 60 + (m || 0);
+};
+
+// Whether `now` falls in the night window — the same [start, end) rule as
+// ParkingSession._night_seconds_between, wrapping past midnight when
+// end <= start. False when night pricing is off.
+export function isNightAt(config: NightPricingConfig, now: Date, timeZone: string) {
+  if (!config.night_pricing_enabled || config.night_start === config.night_end) return false;
+  const t = minutesOfDay(now, timeZone);
+  const start = clockMinutes(config.night_start);
+  const end = clockMinutes(config.night_end);
+  return end <= start ? t >= start || t < end : t >= start && t < end;
+}
 
 export type VehicleCategory = 'CAR' | 'BIKE';
 

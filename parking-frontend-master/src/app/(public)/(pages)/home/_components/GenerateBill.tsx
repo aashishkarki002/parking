@@ -16,6 +16,10 @@ interface IBillProp {
   status?: string;
   stamps?: { vendor: string }[];
   tenantBill?: { vendor: string; overage_minutes: number; amount: string } | null;
+  studentName?: string;
+  // Closed at the POS as a lost ticket (ParkingSession.mark_lost): the
+  // amount is the flat fine, not a parking fee.
+  lostTicket?: boolean;
   onComplete?: () => void;
 }
 export default function GenerateBill({
@@ -29,6 +33,8 @@ export default function GenerateBill({
   status,
   stamps,
   tenantBill,
+  studentName,
+  lostTicket,
   onComplete,
 }: Readonly<IBillProp>) {
   const inDate = formatDate(entryTime);
@@ -61,7 +67,9 @@ export default function GenerateBill({
           : stampVendorNames
             ? `Stamped - ${stampVendorNames}`
             : 'Stamped'
-        : 'Waived';
+        : studentName
+          ? 'Student'
+          : 'Waived';
 
   useEffect(() => {
     const printTimeout = setTimeout(() => {
@@ -99,7 +107,7 @@ export default function GenerateBill({
           }}
         >
           <Typography sx={{ letterSpacing: '2px' }} fontWeight="bold">
-            PARKING RECEIPT
+            {lostTicket ? 'LOST TICKET - FINE RECEIPT' : 'PARKING RECEIPT'}
           </Typography>
         </Box>
         <Box sx={{ marginTop: '5px' }}>
@@ -114,6 +122,7 @@ export default function GenerateBill({
           <Box sx={{ display: 'flex', flexDirection: 'column' }}>
             <Typography>Type: {type === '4W' ? '4 wheeler' : '2 wheeler'}</Typography>
             <Typography>Vehicle No: {vehicleNo || ''}</Typography>
+            {studentName && <Typography>Student: {studentName}</Typography>}
           </Box>
         </Box>
         <Box
@@ -137,7 +146,7 @@ export default function GenerateBill({
           <Typography fontWeight="bold" fontSize="14px">
             {amount > 0 ? (
               <>
-                PAID: ₹{amount} ({formatPaymentMethod(paymentMethod)})
+                {lostTicket ? 'LOST TICKET FINE' : 'PAID'}: ₹{amount} ({formatPaymentMethod(paymentMethod)})
               </>
             ) : (
               <>FREE PARKING ({freeExitLabel})</>

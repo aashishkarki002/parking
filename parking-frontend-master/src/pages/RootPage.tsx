@@ -4,9 +4,12 @@ import Header from '@/components/pComponents/layout/header/Header';
 import Footer from '@/components/pComponents/layout/footer/Footer';
 import { useAppSelector } from '@/lib/public/hooks';
 import { loginSelector } from '@/app/(public)/_login/_redux/selector';
+import { Navigate } from 'react-router-dom';
+import { isTenantUser, TENANT_PORTAL } from '@/lib/public/roles';
 
 const RootPage = () => {
-  const { isLoggedIn } = useAppSelector(loginSelector);
+  const loginState = useAppSelector(loginSelector);
+  const { isLoggedIn } = loginState;
 
   // Unauthenticated view: same layout as Next.js public login page
   if (!isLoggedIn) {
@@ -24,6 +27,11 @@ const RootPage = () => {
         <LoginForm />
       </div>
     );
+  }
+
+  // The POS screen is staff-only; a tenant login has its own portal.
+  if (isTenantUser(loginState)) {
+    return <Navigate to={TENANT_PORTAL} replace />;
   }
 
   // Authenticated view: same structure as Next.js public (pages) layout

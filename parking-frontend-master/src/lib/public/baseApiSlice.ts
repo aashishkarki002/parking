@@ -51,6 +51,8 @@ export const baseApiSlice = createApi({
     'VehicleTypes',
     'Configuration',
     'Operators',
+    'StudentRequests',
+    'Students',
   ],
 });
 

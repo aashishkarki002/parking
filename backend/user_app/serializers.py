@@ -4,6 +4,7 @@ from rest_framework import serializers
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import authenticate
 from .models import User
+from .roles import is_tenant_account
 
 
 # This serializer formats a single permission object
@@ -45,13 +46,18 @@ class UserSerializer(serializers.ModelSerializer):
     isEmailVerified = serializers.BooleanField(source='is_email_verified', read_only=True)
     isPhoneVerified = serializers.BooleanField(source='is_phone_verified', read_only=True)
     isSuperuser = serializers.BooleanField(source='is_superuser', read_only=True)
+    # Tenant-portal logins only: which tenant they submit students for.
+    vendor = serializers.SerializerMethodField()
 
     class Meta:
         model = User
         fields = [
             'email', 'phoneNo', 'isEmailVerified', 'isPhoneVerified',
-            'roles', 'isSuperuser', 'permissions', 'photo'
+            'roles', 'isSuperuser', 'permissions', 'photo', 'vendor'
         ]
+
+    def get_vendor(self, obj):
+        return {'id': obj.vendor_id, 'name': obj.vendor.name} if obj.vendor_id else None
 
 
 # This serializer handles the login logic
@@ -59,12 +65,24 @@ class LoginSerializer(serializers.Serializer):
     # The frontend now sends 'persona' and 'redirectUrl'. We define them here.
     persona = serializers.EmailField(required=True)
     password = serializers.CharField(write_only=True, required=True)
+    # Which login page sent this: tenants sign in on the tenant portal's own
+    # page, staff on the main one. Omitted = either (older clients).
+    portal = serializers.ChoiceField(choices=['staff', 'tenant'], required=False)
 
     def validate(self, data):
         # The rest of this serializer remains exactly the same.
         user = authenticate(email=data.get('persona'), password=data.get('password'))
         if not user or not user.is_active:
             raise serializers.ValidationError("Incorrect username or password.")
+
+        portal = data.get('portal')
+        is_tenant = is_tenant_account(user)
+        if portal == 'tenant' and not is_tenant:
+            raise serializers.ValidationError(
+                "This page is for tenant accounts. Staff sign in on the main login page.")
+        if portal == 'staff' and is_tenant:
+            raise serializers.ValidationError(
+                "Tenant accounts sign in on the tenant portal login page.")
 
         user_data = UserSerializer(user).data
         refresh = RefreshToken.for_user(user)

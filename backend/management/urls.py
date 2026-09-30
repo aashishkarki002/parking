@@ -2,7 +2,7 @@
 
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from . import views
+from . import student_views, tenant_views, views
 
 # Create a router and register our viewsets with it.
 router = DefaultRouter(trailing_slash=False)
@@ -16,6 +16,11 @@ router.register(r'coupon-batches', views.CouponBatchViewSet, basename='couponbat
 router.register(r'parking-passes', views.ParkingPassViewSet)
 router.register(r'sessions', views.ParkingSessionViewSet, basename='parkingsession')
 router.register(r'operators', views.OperatorViewSet, basename='operator')
+router.register(r'student-requests', student_views.StudentRequestViewSet, basename='studentrequest')
+router.register(r'students', student_views.StudentViewSet, basename='student')
+router.register(r'tenant/student-requests', student_views.TenantStudentRequestViewSet, basename='tenant-studentrequest')
+router.register(r'tenant/students', student_views.TenantStudentViewSet, basename='tenant-student')
+router.register(r'tenant/vehicles', tenant_views.TenantVehicleViewSet, basename='tenant-vehicle')
 
 # The API URLs are now determined automatically by the router.
 urlpatterns = [
@@ -33,7 +38,12 @@ urlpatterns = [
     path('rfid-force-entry', views.rfid_force_entry, name='rfid-force-entry'),
     path('rfid-today', views.rfid_today, name='rfid-today'),
     path('rfid-lookup', views.rfid_lookup, name='rfid-lookup'),
+    path('rates', views.parking_rates, name='parking-rates'),
     path('search', views.global_search, name='global-search'),
+
+    # Students (tenant portal requests, admin review, POS card) — see student_views.py
+    path('student-requests/template.csv', student_views.student_template_csv, name='student-template-csv'),
+    path('student-card/scan', student_views.student_card_scan, name='student-card-scan'),
 
     # EasyManage integration (Sallyan House gate) — full path:
     # /api/v1/parking/integrations/easymanage/webhook

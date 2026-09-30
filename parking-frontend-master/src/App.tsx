@@ -15,8 +15,14 @@ import ReportsPage from './pages/ReportsPage';
 import RfidTodayPage from './pages/RfidTodayPage';
 import IdentifyCardPage from './pages/IdentifyCardPage';
 import MaintenancePage from './pages/MaintenancePage';
+import TenantPortalPage from './pages/TenantPortalPage';
+import StudentRequestsPage from './pages/StudentRequestsPage';
+import TenantLoginPage from './pages/TenantLoginPage';
+import TenantVehiclesPage from './pages/TenantVehiclesPage';
 import { RequireRole } from './components/RequireRole';
-import { ROLE_ADMIN, ROLE_POS, ROLE_SUPERADMIN } from './lib/public/roles';
+import {
+  ROLE_ADMIN, ROLE_POS, ROLE_SUPERADMIN, ROLE_TENANT, TENANT_LOGIN, TENANT_PORTAL, TENANT_VEHICLES,
+} from './lib/public/roles';
 
 const ADMIN_UP = [ROLE_ADMIN, ROLE_SUPERADMIN];
 const POS_UP = [ROLE_POS, ROLE_ADMIN, ROLE_SUPERADMIN];
@@ -32,6 +38,16 @@ function App() {
       <Route path="/tenant-gate-today" element={<RequireRole roles={POS_UP}><RfidTodayPage /></RequireRole>} />
       <Route path="/identify-card" element={<RequireRole roles={POS_UP}><IdentifyCardPage /></RequireRole>} />
       <Route path="/tenants" element={<RequireRole roles={ADMIN_UP}><TenantsPage /></RequireRole>} />
+      <Route path="/student-requests" element={<RequireRole roles={ADMIN_UP}><StudentRequestsPage /></RequireRole>} />
+      <Route path={TENANT_LOGIN} element={<TenantLoginPage />} />
+      <Route
+        path={TENANT_PORTAL}
+        element={<RequireRole roles={[ROLE_TENANT]} loginPath={TENANT_LOGIN}><TenantPortalPage /></RequireRole>}
+      />
+      <Route
+        path={TENANT_VEHICLES}
+        element={<RequireRole roles={[ROLE_TENANT]} loginPath={TENANT_LOGIN}><TenantVehiclesPage /></RequireRole>}
+      />
       <Route path="/subscription" element={<RequireRole roles={ADMIN_UP}><SubscriptionsPage /></RequireRole>} />
       <Route path="/billing" element={<RequireRole roles={ADMIN_UP}><BillingPage /></RequireRole>} />
       <Route path="/statements" element={<RequireRole roles={ADMIN_UP}><StatementsPage /></RequireRole>} />

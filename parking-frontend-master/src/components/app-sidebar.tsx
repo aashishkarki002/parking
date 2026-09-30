@@ -17,6 +17,7 @@ import {
   ChartBarIcon,
   ArrowRightStartOnRectangleIcon,
   IdentificationIcon,
+  AcademicCapIcon,
 } from '@heroicons/react/24/outline';
 import Cookies from 'js-cookie';
 import {
@@ -50,7 +51,8 @@ import { PUBLIC_REFRESH_TOKEN } from '@/constants/public/tokens';
 import { HOME } from '@/constants/public/routes';
 import { useTheme } from '@/hooks/theme-provider';
 import { Clock10Icon } from 'lucide-react';
-import { isAdminOrAbove, isSuperAdmin } from '@/lib/public/roles';
+import { isAdminOrAbove, isSuperAdmin, isTenantUser, TENANT_LOGIN, TENANT_PORTAL, TENANT_VEHICLES } from '@/lib/public/roles';
+import { useGetStudentRequestsQuery } from '@/components/students/api';
 
 // Mirrors SubscriptionsPage's DUE_SOON_DAYS threshold — kept in sync manually
 // since there's no shared stats endpoint to source this count from yet.
@@ -216,6 +218,7 @@ export function AppSidebar() {
   const { currentUser, email } = loginState;
   const canSeeBackOffice = isAdminOrAbove(loginState);
   const canManageOperators = isSuperAdmin(loginState);
+  const isTenant = isTenantUser(loginState);
   const [logout] = usePublicLogoutMutation();
 
   // `state` is 'expanded' | 'collapsed' for the desktop icon-rail behavior.
@@ -231,7 +234,12 @@ export function AppSidebar() {
   const [sessionsOpen, setSessionsOpen] = useState(() => ['/sessions', '/tenant-gate-today'].includes(location.pathname));
   const [subscriptionsOpen, setSubscriptionsOpen] = useState(() => location.pathname === '/subscription');
 
-  const { data: sessionsData } = useGetSessionsQuery(undefined);
+  // Sessions are staff data — a tenant login would only get a 403.
+  const { data: sessionsData } = useGetSessionsQuery(undefined, { skip: isTenant });
+  const { data: pendingStudentRequests } = useGetStudentRequestsQuery(
+    { status: 'pending' },
+    { skip: !canSeeBackOffice, pollingInterval: 60000 }
+  );
   // ParkingPassViewSet is admin+ only on the backend — skip the call for pos
   // accounts so they don't take a 403 (and a "Permission denied" toast) just
   // for having the sidebar mounted.
@@ -286,12 +294,12 @@ export function AppSidebar() {
     const finishLogout = () => {
       dispatch(logoutRequest());
       dispatch(baseApiSlice.util.resetApiState());
-      navigate(HOME);
+      navigate(isTenant ? TENANT_LOGIN : HOME);
     };
     logout({ refresh: refreshToken }).unwrap().then(finishLogout).catch(finishLogout);
   };
 
-  const renderItem = (item: { title: string; url: string; icon: typeof Squares2X2Icon }) => {
+  const renderItem = (item: { title: string; url: string; icon: typeof Squares2X2Icon }, pill?: number) => {
     const isActive = location.pathname === item.url;
     return (
       <SidebarMenuItem key={item.title} >
@@ -315,7 +323,8 @@ export function AppSidebar() {
               isActive ? 'text-sidebar-accent-foreground' : 'text-sidebar-foreground/40 group-hover:text-sidebar-foreground/70'
             )}
           />
-          <span className="truncate">{item.title}</span>
+          <span className="flex-1 truncate">{item.title}</span>
+          {!isCollapsed && !!pill && <NavPill value={pill} tone="warning" />}
         </SidebarMenuButton>
       </SidebarMenuItem>
     );
@@ -343,6 +352,10 @@ export function AppSidebar() {
 
   const statementsItem = { title: 'Statements', url: '/statements', icon: DocumentTextIcon };
   const tenantsItem = { title: 'Tenants', url: '/tenants', icon: UsersIcon };
+  const studentRequestsItem = { title: 'Student requests', url: '/student-requests', icon: AcademicCapIcon };
+  const tenantPortalItem = { title: 'Student parking', url: TENANT_PORTAL, icon: AcademicCapIcon };
+  const tenantVehiclesItem = { title: 'Company vehicles', url: TENANT_VEHICLES, icon: TruckIcon };
+  const pendingStudentCount = pendingStudentRequests?.length ?? 0;
 
   return (
     <Sidebar collapsible="icon" className="border-r border-sidebar-border bg-sidebar ">
@@ -391,6 +404,18 @@ export function AppSidebar() {
             </SidebarGroup>
           )}
 
+          {isTenant && (
+            <SidebarGroup>
+              <SidebarGroupContent>
+                <SidebarMenu className="gap-2">
+                  {renderItem(tenantPortalItem)}
+                  {renderItem(tenantVehiclesItem)}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          )}
+
+          {!isTenant && (
           <SidebarGroup>
             {!isCollapsed && (
               <SidebarGroupLabel className=" h-auto truncate px-2.5 py-0 text-[11px] font-semibold tracking-wider text-sidebar-primary uppercase   ">
@@ -410,10 +435,12 @@ export function AppSidebar() {
                   children={sessionChildren}
                 />
                 {canSeeBackOffice && renderItem(tenantsItem)}
+                {canSeeBackOffice && renderItem(studentRequestsItem, pendingStudentCount)}
                 {renderItem(identifyCardItem)}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
+          )}
 
           {canSeeBackOffice && (
             <SidebarGroup>

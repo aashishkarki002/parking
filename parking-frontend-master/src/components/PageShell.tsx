@@ -2,6 +2,9 @@ import type { ReactNode } from 'react';
 import { AppSidebar } from '@/components/app-sidebar';
 import { GlobalSearch } from '@/components/GlobalSearch';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
+import { useAppSelector } from '@/lib/public/hooks';
+import { loginSelector } from '@/app/(public)/_login/_redux/selector';
+import { isTenantUser } from '@/lib/public/roles';
 
 interface PageShellProps {
   title: string;
@@ -13,6 +16,8 @@ interface PageShellProps {
 // row (trigger, title, optional actions) sized to line up with the sidebar
 // header's border. Page-specific content goes in `children`.
 export function PageShell({ title, actions, children }: PageShellProps) {
+  // Global search covers staff data (sessions, members, …) a tenant can't read.
+  const isTenant = isTenantUser(useAppSelector(loginSelector));
   return (
     <SidebarProvider>
       <AppSidebar />
@@ -24,7 +29,7 @@ export function PageShell({ title, actions, children }: PageShellProps) {
           </div>
 
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
-            <GlobalSearch />
+            {!isTenant && <GlobalSearch />}
             {actions}
           </div>
         </div>

@@ -269,10 +269,17 @@ AUTH_USER_MODEL = 'user_app.User'
 
 
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-EMAIL_HOST = 'parkingbackend.brainlycodes.com'
-EMAIL_PORT = 587
-EMAIL_HOST_USER = 'sallyan@parkingbackend.brainlycodes.com'
+EMAIL_HOST = 'mail.sallyanhouse.com'
+EMAIL_PORT = 465
+EMAIL_USE_SSL = True  # port 465 is implicit SSL, not STARTTLS
+EMAIL_TIMEOUT = 10  # seconds; a stuck mail server must not hang the request
+EMAIL_HOST_USER = 'noreply@sallyanhouse.com'
 EMAIL_HOST_PASSWORD = None  # set in local_settings.py
+DEFAULT_FROM_EMAIL = 'Sallyan House Parking <noreply@sallyanhouse.com>'
+
+# Who gets office notifications (e.g. a tenant submitting students for
+# approval) — see management/notifications.py.
+STAFF_NOTIFICATION_EMAILS = ['sallyanhouse@gmail.com']
 
 # EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 # EMAIL_HOST = 'sandbox.smtp.mailtrap.io'
