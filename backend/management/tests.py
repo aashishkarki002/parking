@@ -580,6 +580,16 @@ class TenantAllowanceBillingTests(TestCase):
 
         self.assertEqual(session.calculated_charge, Decimal('120.00'))
 
+    def test_vendor_free_hours_override_global(self):
+        self.config.tenant_free_hours = 8
+        self.config.save()
+        self.vendor.tenant_free_hours = 9
+        self.vendor.save()
+        session = self._bill(self._session(0, 10))
+
+        self.assertEqual(session.calculated_charge, Decimal('60.00'))
+        self.assertIn('Free allowance (9h from', session.notes)
+
 
 class NightPricingTests(TestCase):
     """

@@ -71,6 +71,7 @@ class VendorSerializer(serializers.ModelSerializer):
             'id', 'name', 'location', 'contact_person', 'contact_email', 'created_at', 'updated_at',
             'external_tenant_id', 'car_quota', 'bike_quota', 'gate_access_allowed', 'last_synced_at', 'sync_source',
             'stamp_free_minutes', 'student_early_grace_minutes', 'student_late_grace_minutes',
+            'tenant_free_hours',
         ]
         # EasyManage is the source of truth for these — Django only caches them
         # (via the webhook receiver / reconcile_parking_tenants). Still editable

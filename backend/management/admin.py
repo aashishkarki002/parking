@@ -257,7 +257,8 @@ class VendorAdminForm(forms.ModelForm):
 class VendorAdmin(BaseAdmin):
     form = VendorAdminForm
     list_display = ('name', 'location', 'contact_person', 'contact_email', 'stamp_free_minutes',
-                    'student_early_grace_minutes', 'student_late_grace_minutes', 'portal_login')
+                    'student_early_grace_minutes', 'student_late_grace_minutes', 'tenant_free_hours',
+                    'portal_login')
     search_fields = ('name', 'contact_person', 'location')
 
     def get_fieldsets(self, request, obj=None):

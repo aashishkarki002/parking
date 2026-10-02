@@ -226,6 +226,22 @@ class Vendor(models.Model):
                   "Blank uses the global default (Parking Configuration)."
     )
 
+    # --- Tenant free-parking allowance ---
+    # Overrides ParkingConfiguration.tenant_free_hours for this tenant's
+    # registered vehicles (see ParkingSession._apply_tenant_allowance_billing).
+    tenant_free_hours = models.PositiveSmallIntegerField(
+        null=True, blank=True,
+        help_text="Hours from entry that this tenant's registered vehicles park free (day hours only). "
+                  "Blank uses the global default (Parking Configuration)."
+    )
+
+    @property
+    def effective_tenant_free_hours(self):
+        """Free-window hours for this tenant, falling back to the global default."""
+        if self.tenant_free_hours is not None:
+            return self.tenant_free_hours
+        return ParkingConfiguration.get_solo().tenant_free_hours
+
     @property
     def effective_student_grace_minutes(self):
         """(early, late) grace minutes, falling back to the global defaults."""
@@ -1280,7 +1296,7 @@ class ParkingSession(models.Model):
     def _apply_tenant_allowance_billing(self):
         """
         Billing for a registered tenant vehicle (pass holder or not). Day
-        minutes inside the free window — ParkingConfiguration.tenant_free_hours
+        minutes inside the free window — the tenant's tenant_free_hours (or the global ParkingConfiguration default)
         from the entry that opened it (see _free_window_start) — are free.
         Night minutes are always charged, and day minutes after the window
         ends are billed like a visitor's. e.g. entry 12:00 -> free until
@@ -1321,7 +1337,9 @@ class ParkingSession(models.Model):
                 self.status = 'COVERED_BY_PASS'
             return True
 
-        window = timedelta(hours=config.tenant_free_hours)
+        company = self.registered_staff_member.company
+        free_hours = company.effective_tenant_free_hours if company else config.tenant_free_hours
+        window = timedelta(hours=free_hours)
         window_start = self._free_window_start(window)
         window_end = window_start + window
         in_window = min(self.duration_minutes,
@@ -1339,7 +1357,7 @@ class ParkingSession(models.Model):
         # Billing can be recalculated for the same session (e.g. a coupon
         # applied after exit), so replace any earlier allowance line.
         local_start, local_end = timezone.localtime(window_start), timezone.localtime(window_end)
-        note = (f"Free allowance ({config.tenant_free_hours}h from "
+        note = (f"Free allowance ({free_hours}h from "
                 f"{local_start:%d %b %H:%M}, until {local_end:%d %b %H:%M}): "
                 f"{self._fmt_minutes(free_day)} free this visit, "
                 f"{self._fmt_minutes(chargeable)} charged.")
