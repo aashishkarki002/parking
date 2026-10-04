@@ -935,6 +935,14 @@ class ParkingSession(models.Model):
     class Meta:
         ordering = ['-entry_time']
         verbose_name = "Parking Session"
+        indexes = [
+            # Sessions table: a status tab, newest first.
+            models.Index(fields=['status', '-entry_time'], name='session_status_entry_idx'),
+            # "Closed today" / "collected today" on the sessions page.
+            models.Index(fields=['exit_time'], name='session_exit_time_idx'),
+            # Reports and statements: a member's visits, a lapsed pass's usage.
+            models.Index(fields=['registered_staff_member', 'entry_time'], name='session_staff_entry_idx'),
+        ]
         constraints = [
             models.UniqueConstraint(
                 fields=['rfid_card'],
@@ -1146,7 +1154,8 @@ class ParkingSession(models.Model):
         plan = self.vehicle_type.pricing_plan
         if not plan or plan.night_rate_per_hour <= 0:
             return None
-        config = ParkingConfiguration.get_solo()
+        # Bulk readers (reports) set _solo_config so each row doesn't re-query it.
+        config = getattr(self, '_solo_config', None) or ParkingConfiguration.get_solo()
         if not config.night_pricing_enabled or config.night_start == config.night_end:
             return None
         return config
@@ -1393,6 +1402,9 @@ class ParkingSession(models.Model):
 
     @property
     def total_stamp_minutes(self):
+        # Lists prefetch `stamps`; summing them here avoids a query per row.
+        if 'stamps' in getattr(self, '_prefetched_objects_cache', {}):
+            return sum(stamp.free_minutes_granted for stamp in self.stamps.all())
         return self.stamps.aggregate(total=Sum('free_minutes_granted'))['total'] or 0
 
     @property

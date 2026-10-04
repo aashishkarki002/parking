@@ -2,7 +2,7 @@
 
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from . import dashboard_views, student_views, tenant_views, views
+from . import dashboard_views, report_views, student_views, tenant_views, views
 
 # Create a router and register our viewsets with it.
 router = DefaultRouter(trailing_slash=False)
@@ -44,6 +44,12 @@ urlpatterns = [
     path('dashboard/summary', dashboard_views.dashboard_summary, name='dashboard-summary'),
     path('dashboard/sessions', dashboard_views.dashboard_sessions, name='dashboard-sessions'),
     path('dashboard/session-counts', dashboard_views.session_counts, name='dashboard-session-counts'),
+    path('reports/summary', report_views.report_summary, name='report-summary'),
+    path('sessions-table', report_views.sessions_table, name='sessions-table'),
+    path('sessions-table/overview', report_views.sessions_overview, name='sessions-overview'),
+    path('statements/visits', report_views.statement_visits, name='statement-visits'),
+    path('statements/months', report_views.statement_months, name='statement-months'),
+    path('pass-lapsed-usage', report_views.lapsed_pass_usage, name='lapsed-pass-usage'),
 
     # Students (tenant portal requests, admin review, POS card) — see student_views.py
     path('student-requests/template.csv', student_views.student_template_csv, name='student-template-csv'),
