@@ -1,4 +1,5 @@
 from django.utils import timezone
+from django.utils.dateparse import parse_date
 # pyrefly: ignore [missing-import]
 from rest_framework import mixins, viewsets, status
 # pyrefly: ignore [missing-import]
@@ -1136,6 +1137,36 @@ def rfid_today(request):
     return Response(rfid.todays_sessions())
 
 
+RFID_TAPS_MAX_LIMIT = 200
+
+
+@api_view(['GET'])
+@permission_classes([IsPOSOrAbove])
+def rfid_taps(request):
+    """
+    One local day's RFID taps (default today), newest first, with the day's
+    entry/exit/rejected totals. Optional: action, q (name/plate/tenant/uid),
+    uid (one card — totals follow it too), offset, limit. See rfid.tap_log.
+    """
+    raw_date = request.query_params.get('date')
+    day = parse_date(raw_date) if raw_date else timezone.localdate()
+    if day is None:
+        return Response({'error': 'date must be YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        offset = max(0, int(request.query_params.get('offset', 0)))
+        limit = max(1, min(int(request.query_params.get('limit', 50)), RFID_TAPS_MAX_LIMIT))
+    except (TypeError, ValueError):
+        return Response({'error': 'offset and limit must be numbers'}, status=status.HTTP_400_BAD_REQUEST)
+    return Response(rfid.tap_log(
+        day,
+        action=request.query_params.get('action'),
+        q=request.query_params.get('q', ''),
+        uid=(request.query_params.get('uid') or '').strip(),
+        offset=offset,
+        limit=limit,
+    ))
+
+
 @api_view(['GET'])
 @permission_classes([IsPOSOrAbove])
 def rfid_lookup(request):
@@ -1180,6 +1211,8 @@ def parking_rates(request):
 SEARCH_MIN_LENGTH = 2
 SEARCH_DEFAULT_LIMIT = 5
 SEARCH_MAX_LIMIT = 10
+# Sessions match almost any plate, so keep them from pushing other groups below the fold.
+SEARCH_SESSION_LIMIT = 3
 
 
 def _search_item(type_, id_, title, subtitle='', **meta):
@@ -1230,7 +1263,7 @@ def global_search(request):
                 default=Value(1), output_field=IntegerField(),
             ),
         )
-        .order_by('_exact', '_active', '-entry_time')[:limit]
+        .order_by('_exact', '_active', '-entry_time')[:min(limit, SEARCH_SESSION_LIMIT)]
     )
     for s in sessions:
         results.append(_search_item(

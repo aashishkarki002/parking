@@ -1184,6 +1184,48 @@ class RFIDGateTests(TestCase):
                          status.HTTP_400_BAD_REQUEST)
 
 
+    def taps(self, **params):
+        return self.client.get('/api/v1/parking/rfid-taps', params)
+
+    def test_tap_log_counts_the_days_entries_exits_and_rejections(self):
+        self.tap()
+        self.age()
+        self.tap()
+        self.tap('0000000001')
+        self.card.is_active = False
+        self.card.save()
+        self.tap()
+
+        data = self.taps().data
+        self.assertEqual(data['summary'], {
+            'total': 4, 'entries': 1, 'exits': 1, 'rejected': 2, 'forced': 0, 'unknown': 2, 'cards': 2,
+        })
+        self.assertEqual(sum(h['entries'] + h['exits'] + h['rejected'] for h in data['hours']), 4)
+        self.assertEqual([r['action'] for r in data['results']], ['REJECTED', 'REJECTED', 'EXIT', 'ENTRY'])
+        # A blocked card's rejection still names its holder; an unknown one can't.
+        blocked, unknown = data['results'][0], data['results'][1]
+        self.assertEqual(blocked['tenant']['name'], self.staff.name)
+        self.assertFalse(blocked['card_active'])
+        self.assertIsNone(unknown['tenant'])
+        self.assertFalse(unknown['card_known'])
+
+    def test_tap_log_filters_narrow_the_list_not_the_totals(self):
+        self.tap()
+        self.tap('0000000001')
+        entries_only = self.taps(action='ENTRY').data
+        self.assertEqual(entries_only['count'], 1)
+        self.assertEqual(entries_only['summary']['total'], 2)
+
+        by_name = self.taps(q=self.staff.name[:4]).data
+        self.assertEqual([r['uid'] for r in by_name['results']], ['0012345678'])
+
+        one_card = self.taps(uid='0000000001').data
+        self.assertEqual(one_card['summary']['total'], 1)
+
+        other_day = self.taps(date=str(timezone.localdate() - timedelta(days=1))).data
+        self.assertEqual(other_day['summary']['total'], 0)
+        self.assertEqual(self.taps(date='nope').status_code, status.HTTP_400_BAD_REQUEST)
+
 class RFIDCardAPITests(TestCase):
     """The tenant detail card reads a member's RFID cards from /staff and
     blocks/unblocks one through /rfid-cards/<id>."""

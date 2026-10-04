@@ -2,7 +2,7 @@
 
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from . import student_views, tenant_views, views
+from . import dashboard_views, student_views, tenant_views, views
 
 # Create a router and register our viewsets with it.
 router = DefaultRouter(trailing_slash=False)
@@ -38,8 +38,12 @@ urlpatterns = [
     path('rfid-force-entry', views.rfid_force_entry, name='rfid-force-entry'),
     path('rfid-today', views.rfid_today, name='rfid-today'),
     path('rfid-lookup', views.rfid_lookup, name='rfid-lookup'),
+    path('rfid-taps', views.rfid_taps, name='rfid-taps'),
     path('rates', views.parking_rates, name='parking-rates'),
     path('search', views.global_search, name='global-search'),
+    path('dashboard/summary', dashboard_views.dashboard_summary, name='dashboard-summary'),
+    path('dashboard/sessions', dashboard_views.dashboard_sessions, name='dashboard-sessions'),
+    path('dashboard/session-counts', dashboard_views.session_counts, name='dashboard-session-counts'),
 
     # Students (tenant portal requests, admin review, POS card) — see student_views.py
     path('student-requests/template.csv', student_views.student_template_csv, name='student-template-csv'),

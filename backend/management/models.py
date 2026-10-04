@@ -886,7 +886,7 @@ class ParkingSession(models.Model):
         max_length=20, db_index=True, blank=True, null=True)
     registered_staff_member = models.ForeignKey(
         'Staff', on_delete=models.SET_NULL, null=True, blank=True, related_name='parking_sessions', editable=False)
-    entry_time = models.DateTimeField(default=timezone.now)
+    entry_time = models.DateTimeField(default=timezone.now, db_index=True)
     exit_time = models.DateTimeField(null=True, blank=True)
     duration_minutes = models.PositiveIntegerField(
         null=True, blank=True, editable=False)

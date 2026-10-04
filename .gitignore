@@ -12,3 +12,9 @@ backend/venv/
 # Database dumps/backups (may contain customer data)
 *.sql
 *.dump
+
+# Local DB backups and test-case spreadsheets
+backend/db_backups/
+*.xlsx
+# Uploaded student lists (FileField upload_to)
+backend/student_requests/

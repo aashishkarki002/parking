@@ -325,3 +325,103 @@ def todays_sessions():
         'completed_minutes': completed_minutes,
         'sessions': rows,
     }
+
+
+REJECT_UNKNOWN = 'unknown or inactive RFID card'
+TAP_ACTIONS = ('ENTRY', 'EXIT', 'REJECTED', 'FORCED_ENTRY')
+
+
+def tap_log(day, action=None, q='', uid='', offset=0, limit=50):
+    """
+    Every RFID tap the booth reader logged on one local day — entries,
+    exits, rejections and staff-forced entries — newest first, plus the
+    day's totals and an hourly entry/exit breakdown. Totals and hours are
+    for the whole day (or the one card, with `uid`); `action` and `q` only
+    narrow the list.
+
+    Duplicate taps inside the cooldown are never logged, so every row here
+    is a tap the gate acted on (or refused).
+    """
+    from datetime import datetime
+
+    tz = timezone.get_current_timezone()
+    start = timezone.make_aware(datetime.combine(day, datetime.min.time()), tz)
+    end = start + timedelta(days=1)
+
+    day_qs = CardScanLog.objects.filter(source='RFID', scanned_at__gte=start, scanned_at__lt=end)
+    if uid:
+        day_qs = day_qs.filter(card_code_used=uid)
+
+    summary = {'total': 0, 'entries': 0, 'exits': 0, 'rejected': 0, 'forced': 0, 'unknown': 0}
+    hours = [{'hour': h, 'entries': 0, 'exits': 0, 'rejected': 0} for h in range(24)]
+    cards = set()
+    for act, reason, code, at in day_qs.values_list('action', 'reject_reason', 'card_code_used', 'scanned_at'):
+        summary['total'] += 1
+        cards.add(code)
+        bucket = hours[timezone.localtime(at, tz).hour]
+        if act == 'ENTRY' or act == 'FORCED_ENTRY':
+            summary['entries'] += 1
+            bucket['entries'] += 1
+            if act == 'FORCED_ENTRY':
+                summary['forced'] += 1
+        elif act == 'EXIT':
+            summary['exits'] += 1
+            bucket['exits'] += 1
+        else:
+            summary['rejected'] += 1
+            bucket['rejected'] += 1
+            if reason == REJECT_UNKNOWN:
+                summary['unknown'] += 1
+    summary['cards'] = len(cards)
+
+    list_qs = day_qs.select_related('staff__company')
+    if action == 'ENTRY':
+        list_qs = list_qs.filter(action__in=('ENTRY', 'FORCED_ENTRY'))
+    elif action in TAP_ACTIONS:
+        list_qs = list_qs.filter(action=action)
+    q = (q or '').strip()
+    if q:
+        plate = ''.join(q.split())
+        list_qs = list_qs.filter(
+            Q(card_code_used__icontains=q) | Q(staff__name__icontains=q)
+            | Q(staff__license_plate__icontains=plate) | Q(staff__company__name__icontains=q)
+        )
+
+    count = list_qs.count()
+    page = list(list_qs.order_by('-scanned_at', '-id')[offset:offset + limit])
+
+    # A blocked card's taps are logged without a holder (tap() only finds
+    # active cards), but the office still wants to know whose it was.
+    holders = {
+        c.uid: c for c in RFIDCard.objects.select_related('staff__company')
+        .filter(uid__in={log.card_code_used for log in page})
+    }
+
+    rows = []
+    for log in page:
+        card = holders.get(log.card_code_used)
+        staff = log.staff or (card.staff if card else None)
+        rows.append({
+            'id': log.pk,
+            'scanned_at': log.scanned_at,
+            'action': log.action,
+            'uid': log.card_code_used,
+            'reject_reason': log.reject_reason,
+            'card_known': card is not None,
+            'card_active': card.is_active if card else None,
+            'tenant': {
+                'id': staff.pk,
+                'name': staff.name,
+                'company': staff.company.name if staff.company else None,
+                'company_id': staff.company_id,
+                'license_plate': staff.license_plate,
+            } if staff else None,
+        })
+
+    return {
+        'date': day,
+        'summary': summary,
+        'hours': hours,
+        'count': count,
+        'results': rows,
+    }
