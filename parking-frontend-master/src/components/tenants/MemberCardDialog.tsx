@@ -4,7 +4,7 @@ import { toast } from 'react-toastify';
 import dayjs from 'dayjs';
 import { Motorbike, Car, CalendarClock, Copy, Eye, EyeOff, Nfc, Pencil, Plus, Power, ReceiptText } from 'lucide-react';
 import {
-  useGetSessionsQuery,
+  useGetSessionsTableQuery,
   useUpdateRfidCardMutation,
 } from '@/app/(public)/(pages)/home/_redux/api';
 import { Button } from '@/components/ui/button';
@@ -62,8 +62,6 @@ interface MemberCardDialogProps {
   onChanged: () => void;
 }
 
-const normalizePlate = (plate: string | null) => (plate ?? '').replace(/[\s-]/g, '').toUpperCase();
-
 // Same length as the UID so nothing about it is lost but the digits themselves.
 const maskUid = (uid: string) => `${'•'.repeat(Math.max(0, uid.length - 4))}${uid.slice(-4)}`;
 
@@ -110,7 +108,11 @@ export function MemberCardDialog({ member, row, open, onOpenChange, onChanged }:
   const [saving, setSaving] = useState(false);
   const faceRef = useRef<HTMLDivElement>(null);
   const handleSubmittingChange = useCallback((value: boolean) => setSaving(value), []);
-  const { data: sessionsData, isLoading: sessionsLoading } = useGetSessionsQuery(undefined, { skip: !open });
+  // Only this member's latest few visits, matched server-side by plate.
+  const { data: sessionsData, isLoading: sessionsLoading } = useGetSessionsTableQuery(
+    { plate: member?.license_plate ?? '', page_size: RECENT_VISITS },
+    { skip: !open || !member?.license_plate }
+  );
   const [updateRfidCard, { isLoading: toggling }] = useUpdateRfidCardMutation();
   const { phase, capture, error, refusals, submit, reset } = useAddCard(member?.id, () => {
     // Keep the number in view once it is on the card: it was just entered.
@@ -145,11 +147,7 @@ export function MemberCardDialog({ member, row, open, onOpenChange, onChanged }:
 
   const visits = useMemo(() => {
     if (!member) return [];
-    const plate = normalizePlate(member.license_plate);
-    return ((sessionsData ?? []) as MemberSession[])
-      .filter((s) => normalizePlate(s.license_plate) === plate)
-      .sort((a, b) => dayjs(b.entry_time).valueOf() - dayjs(a.entry_time).valueOf())
-      .slice(0, RECENT_VISITS);
+    return (sessionsData?.results ?? []) as MemberSession[];
   }, [sessionsData, member]);
 
   if (!member) return null;

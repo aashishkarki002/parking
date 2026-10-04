@@ -188,6 +188,8 @@ export interface BucketPlan {
   bucketNoun: string;
   /** Bucket index for a date, or -1 when it falls outside the window. */
   indexOf: (d: Date) => number;
+  /** labels.length + 1 instants; bucket i covers [edges[i], edges[i + 1]). */
+  edges: Date[];
 }
 
 const HOUR_BLOCK_LABELS = ['12a', '3a', '6a', '9a', '12p', '3p', '6p', '9p'];
@@ -199,6 +201,12 @@ const monthName = new Intl.DateTimeFormat('en-US', { month: 'short' });
 export function planBuckets(start: Date, end: Date): BucketPlan {
   const spanDays = Math.max(1, Math.round((end.getTime() - start.getTime()) / DAY_MS));
   const dayIndex = (d: Date) => Math.round((startOfDay(d).getTime() - start.getTime()) / DAY_MS);
+  const addDays = (n: number) => {
+    const d = new Date(start);
+    d.setDate(d.getDate() + n);
+    return d;
+  };
+  const range = (n: number) => Array.from({ length: n }, (_, i) => i);
 
   if (spanDays <= 2) {
     const blocks = spanDays * 8;
@@ -209,6 +217,7 @@ export function planBuckets(start: Date, end: Date): BucketPlan {
         const i = Math.floor((d.getTime() - start.getTime()) / (3 * 3_600_000));
         return i >= 0 && i < blocks ? i : -1;
       },
+      edges: range(blocks + 1).map((i) => new Date(start.getTime() + i * 3 * 3_600_000)),
     };
   }
 
@@ -225,6 +234,7 @@ export function planBuckets(start: Date, end: Date): BucketPlan {
         const i = dayIndex(d);
         return i >= 0 && i < spanDays ? i : -1;
       },
+      edges: range(spanDays + 1).map(addDays),
     };
   }
 
@@ -241,6 +251,7 @@ export function planBuckets(start: Date, end: Date): BucketPlan {
         const i = Math.floor(dayIndex(d) / 7);
         return i >= 0 && i < weeks ? i : -1;
       },
+      edges: range(weeks + 1).map((i) => addDays(i * 7)),
     };
   }
 
@@ -258,5 +269,6 @@ export function planBuckets(start: Date, end: Date): BucketPlan {
       const i = (d.getFullYear() - start.getFullYear()) * 12 + (d.getMonth() - start.getMonth());
       return i >= 0 && i < months ? i : -1;
     },
+    edges: range(months + 1).map((i) => new Date(start.getFullYear(), start.getMonth() + i, 1)),
   };
 }

@@ -46,7 +46,7 @@ import { loginSelector } from '@/app/(public)/_login/_redux/selector';
 import { logoutRequest } from '@/app/(public)/_login/_redux/slice';
 import { usePublicLogoutMutation } from '@/app/(public)/_login/_redux/api';
 import { baseApiSlice } from '@/lib/public/baseApiSlice';
-import { useGetParkingPassesQuery, useGetSessionsQuery } from '@/app/(public)/(pages)/home/_redux/api';
+import { useGetParkingPassesQuery, useGetSessionCountsQuery } from '@/app/(public)/(pages)/home/_redux/api';
 import { PUBLIC_REFRESH_TOKEN } from '@/constants/public/tokens';
 import { HOME } from '@/constants/public/routes';
 import { useTheme } from '@/hooks/theme-provider';
@@ -58,11 +58,6 @@ import { useGetStudentRequestsQuery } from '@/components/students/api';
 // since there's no shared stats endpoint to source this count from yet.
 const DUE_SOON_DAYS = 14;
 
-interface SidebarSession {
-  status: 'ACTIVE' | 'COMPLETED' | 'PAID' | 'WAIVED' | 'COVERED_BY_PASS';
-  calculated_charge: string | null;
-}
-
 interface SidebarPass {
   is_active: boolean;
   valid_until: string;
@@ -72,7 +67,9 @@ const topItem = { title: 'Dashboard', url: '/dashboard', icon: Squares2X2Icon };
 // Reports sits beside Dashboard rather than inside Billing: it spans sessions,
 // tenants, validation and revenue, so it is not owned by any one group.
 const reportsItem = { title: 'Reports', url: '/reports', icon: ChartBarIcon };
-const identifyCardItem = { title: 'Identify card', url: '/identify-card', icon: IdentificationIcon };
+// The booth reader's two screens. The tap log is what people come back to,
+// so opening the group lands there; Identify card is the occasional tool.
+const CARD_PATHS = ['/card-taps', '/identify-card'];
 
 type NavChild = { title: string; url: string; isActive: boolean; pill?: number };
 
@@ -90,11 +87,16 @@ function NavPill({ value, tone }: { value: number; tone: 'accent' | 'warning' | 
   return (
     <Badge
       variant="secondary"
-      className={cn('h-5 min-w-5 shrink-0 justify-center rounded-md px-1.5 font-mono text-[10px] tabular-nums', pillClasses(tone))}
+      className={cn('h-[18px] min-w-[18px] shrink-0 justify-center rounded-full px-1.5 text-[11px] font-medium tabular-nums', pillClasses(tone))}
     >
       {value}
     </Badge>
   );
+}
+
+// Collapsed rail has no room for a count, so a quiet dot signals "needs attention".
+function NavDot() {
+  return <i aria-hidden className="pointer-events-none absolute top-1.5 right-1.5 size-1.5 rounded-full bg-amber-500 ring-2 ring-sidebar" />;
 }
 
 function NavExpandable({
@@ -106,6 +108,7 @@ function NavExpandable({
   onToggle,
   children,
   onNavigate,
+  landingUrl,
 }: {
   title: string;
   icon: typeof Squares2X2Icon;
@@ -115,6 +118,8 @@ function NavExpandable({
   onToggle: () => void;
   children: NavChild[];
   onNavigate: (url: string) => void;
+  /** Opening the group from elsewhere also goes here, so one click lands on a page. */
+  landingUrl?: string;
 }) {
   const { isMobile, state } = useSidebar();
   const isCollapsed = state === 'collapsed' && !isMobile;
@@ -128,6 +133,7 @@ function NavExpandable({
             render={
               <SidebarMenuButton
                 isActive={highlighted}
+                aria-label={title}
                 className={cn(
                   'group relative h-9 gap-2.5 rounded-lg px-2.5 py-2.5 text-sm font-medium',
                   highlighted
@@ -143,7 +149,7 @@ function NavExpandable({
                 highlighted ? 'text-sidebar-accent-foreground' : 'text-sidebar-foreground/40 group-hover:text-sidebar-foreground/70'
               )}
             />
-            <span className="truncate">{title}</span>
+            {children.some((c) => (c.pill ?? 0) > 0) && <NavDot />}
           </DropdownMenuTrigger>
           <DropdownMenuContent side="right" align="start" sideOffset={12} className="w-56">
             <DropdownMenuLabel>{title}</DropdownMenuLabel>
@@ -166,7 +172,10 @@ function NavExpandable({
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
-        onClick={onToggle}
+        onClick={() => {
+          onToggle();
+          if (!open && !isActive && landingUrl) onNavigate(landingUrl);
+        }}
         isActive={highlighted}
         aria-expanded={open}
         className={cn(
@@ -231,11 +240,16 @@ export function AppSidebar() {
   // Lazily seeded from the current route so a group opens on first render
   // when it's already showing (e.g. landing on /sessions?tab=ACTIVE from a
   // link), without fighting the user's own expand/collapse afterwards.
-  const [sessionsOpen, setSessionsOpen] = useState(() => ['/sessions', '/tenant-gate-today'].includes(location.pathname));
+  const [sessionsOpen, setSessionsOpen] = useState(
+    () => ['/sessions', '/tenant-gate-today'].includes(location.pathname) || location.pathname.startsWith('/sessions/')
+  );
   const [subscriptionsOpen, setSubscriptionsOpen] = useState(() => location.pathname === '/subscription');
+  const [cardsOpen, setCardsOpen] = useState(() => CARD_PATHS.includes(location.pathname));
 
   // Sessions are staff data — a tenant login would only get a 403.
-  const { data: sessionsData } = useGetSessionsQuery(undefined, { skip: isTenant });
+  // Counted server-side — fetching the whole session list just for two badges
+  // made every page wait on it.
+  const { data: sessionCounts } = useGetSessionCountsQuery(undefined, { skip: isTenant });
   const { data: pendingStudentRequests } = useGetStudentRequestsQuery(
     { status: 'pending' },
     { skip: !canSeeBackOffice, pollingInterval: 60000 }
@@ -244,14 +258,10 @@ export function AppSidebar() {
   // accounts so they don't take a 403 (and a "Permission denied" toast) just
   // for having the sidebar mounted.
   const { data: passesData } = useGetParkingPassesQuery(undefined, { skip: !canSeeBackOffice });
-  const sessions: SidebarSession[] = sessionsData ?? [];
   const passes: SidebarPass[] = passesData ?? [];
 
-  const activeSessionCount = useMemo(() => sessions.filter((s) => s.status === 'ACTIVE').length, [sessions]);
-  const unpaidExitCount = useMemo(
-    () => sessions.filter((s) => s.status === 'COMPLETED' && Number(s.calculated_charge || 0) > 0).length,
-    [sessions]
-  );
+  const activeSessionCount = sessionCounts?.active ?? 0;
+  const unpaidExitCount = sessionCounts?.unpaid_exits ?? 0;
   const dueSoonPassCount = useMemo(() => {
     const now = dayjs();
     return passes.filter((p) => {
@@ -314,17 +324,14 @@ export function AppSidebar() {
               : 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground '
           )}
         >
-          {isActive && !isCollapsed && (
-            <span className="absolute top-1/2 left-0 h-5 w-1 -translate-y-1/2 rounded-r-full bg-sidebar-primary " />
-          )}
           <item.icon
             className={cn(
               'h-[18px] w-[18px] shrink-0',
               isActive ? 'text-sidebar-accent-foreground' : 'text-sidebar-foreground/40 group-hover:text-sidebar-foreground/70'
             )}
           />
-          <span className="flex-1 truncate">{item.title}</span>
-          {!isCollapsed && !!pill && <NavPill value={pill} tone="warning" />}
+          <span className="flex-1 truncate group-data-[collapsible=icon]:hidden">{item.title}</span>
+          {!!pill && (isCollapsed ? <NavDot /> : <NavPill value={pill} tone="warning" />)}
         </SidebarMenuButton>
       </SidebarMenuItem>
     );
@@ -343,6 +350,12 @@ export function AppSidebar() {
     { title: 'Tenant gate today', url: '/tenant-gate-today', isActive: location.pathname === '/tenant-gate-today' },
   ];
 
+  const isCards = CARD_PATHS.includes(location.pathname);
+  const cardChildren: NavChild[] = [
+    { title: 'Tap log', url: '/card-taps', isActive: location.pathname === '/card-taps' },
+    { title: 'Identify card', url: '/identify-card', isActive: location.pathname === '/identify-card' },
+  ];
+
   const isSubscriptions = location.pathname === '/subscription';
   const subscriptionChildren: NavChild[] = [
     { title: 'Active passes', url: '/subscription?tab=ACTIVE', isActive: isSubscriptions && searchParams.get('tab') === 'ACTIVE' },
@@ -359,7 +372,7 @@ export function AppSidebar() {
 
   return (
     <Sidebar collapsible="icon" className="border-r border-sidebar-border bg-sidebar ">
-      <SidebarHeader className="h-16 shrink-0 justify-center gap-0 border-b border-sidebar-border px-3 ">
+      <SidebarHeader className="h-16 shrink-0 justify-center gap-0 border-b border-sidebar-border px-3 group-data-[collapsible=icon]:px-0">
         <div
           className={cn(
             ' flex min-w-0 items-center gap-2',
@@ -367,7 +380,7 @@ export function AppSidebar() {
           )}
         >
           <div
-            className={`  flex items-center gap-3 px-1  ${isCollapsed ? "justify-center" : ""}`}
+            className={cn('flex items-center gap-3 px-1', isCollapsed && 'justify-center px-0')}
           >
             <img
               src="/images/website/sallyanHouse.png"
@@ -376,10 +389,10 @@ export function AppSidebar() {
             />
             {!isCollapsed && (
               <div className="min-w-0 leading-tight gap-1">
-                <div className="truncate text-[15px] font-semibold tracking-tight text-sidebar-foreground text-md">
+                <div className="truncate text-sm font-semibold text-sidebar-foreground">
                   Parking
                 </div>
-                <div className="truncate text-[10px] font-medium tracking-wide text-sidebar-foreground/50 uppercase space-x-2">
+                <div className="truncate text-xs text-sidebar-foreground/50">
                   Management
                 </div>
               </div>
@@ -391,12 +404,12 @@ export function AppSidebar() {
 
       </SidebarHeader>
 
-      <SidebarContent className=" px-2   ">
+      <SidebarContent className="px-2 group-data-[collapsible=icon]:px-0">
         <div className="flex min-h-0 flex-1 flex-col  ">
           {canSeeBackOffice && (
-            <SidebarGroup className="p-0 m-1">
+            <SidebarGroup className="p-2 pb-0">
               <SidebarGroupContent className=''>
-                <SidebarMenu className="gap-1">
+                <SidebarMenu className="gap-0.5">
                   {renderItem(topItem)}
                   {renderItem(reportsItem)}
                 </SidebarMenu>
@@ -407,7 +420,7 @@ export function AppSidebar() {
           {isTenant && (
             <SidebarGroup>
               <SidebarGroupContent>
-                <SidebarMenu className="gap-2">
+                <SidebarMenu className="gap-0.5">
                   {renderItem(tenantPortalItem)}
                   {renderItem(tenantVehiclesItem)}
                 </SidebarMenu>
@@ -417,17 +430,16 @@ export function AppSidebar() {
 
           {!isTenant && (
           <SidebarGroup>
-            {!isCollapsed && (
-              <SidebarGroupLabel className=" h-auto truncate px-2.5 py-0 text-[11px] font-semibold tracking-wider text-sidebar-primary uppercase   ">
-                Core
-              </SidebarGroupLabel>
-            )}
+            <SidebarGroupLabel className="h-auto truncate px-2.5 pt-1 pb-1 text-xs font-medium text-sidebar-foreground/50">
+              Core
+            </SidebarGroupLabel>
+            <div aria-hidden className="mx-auto mb-2 hidden h-px w-6 bg-sidebar-border group-data-[collapsible=icon]:block" />
             <SidebarGroupContent>
-              <SidebarMenu className="gap-2">
+              <SidebarMenu className="gap-0.5">
                 <NavExpandable
                   title="Sessions"
                   icon={BuildingOffice2Icon}
-                  isActive={isSessions}
+                  isActive={isSessions || location.pathname.startsWith('/sessions/')}
                   pillCount={activeSessionCount}
                   open={sessionsOpen}
                   onToggle={() => setSessionsOpen((o) => !o)}
@@ -436,7 +448,16 @@ export function AppSidebar() {
                 />
                 {canSeeBackOffice && renderItem(tenantsItem)}
                 {canSeeBackOffice && renderItem(studentRequestsItem, pendingStudentCount)}
-                {renderItem(identifyCardItem)}
+                <NavExpandable
+                  title="Cards"
+                  icon={IdentificationIcon}
+                  isActive={isCards}
+                  open={cardsOpen}
+                  onToggle={() => setCardsOpen((o) => !o)}
+                  onNavigate={goTo}
+                  children={cardChildren}
+                  landingUrl="/card-taps"
+                />
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
@@ -444,13 +465,12 @@ export function AppSidebar() {
 
           {canSeeBackOffice && (
             <SidebarGroup>
-              {!isCollapsed && (
-                <SidebarGroupLabel className=" h-auto truncate px-2.5 py-0 text-[11px] font-semibold tracking-wider text-sidebar-primary uppercase   ">
-                  Billing
-                </SidebarGroupLabel>
-              )}
+              <SidebarGroupLabel className="h-auto truncate px-2.5 pt-1 pb-1 text-xs font-medium text-sidebar-foreground/50">
+                Billing
+              </SidebarGroupLabel>
+              <div aria-hidden className="mx-auto mb-2 hidden h-px w-6 bg-sidebar-border group-data-[collapsible=icon]:block" />
               <SidebarGroupContent>
-                <SidebarMenu className="gap-2">
+                <SidebarMenu className="gap-0.5">
                   <NavExpandable
                     title="Subscriptions"
                     icon={Clock10Icon}
@@ -469,16 +489,17 @@ export function AppSidebar() {
         </div>
       </SidebarContent>
 
-      <SidebarFooter className="border-t border-sidebar-border px-3 py-3">
+      <SidebarFooter className="border-t border-sidebar-border px-3 py-3 group-data-[collapsible=icon]:px-0">
         <SidebarMenu>
           <SidebarMenuItem>
             <Popover>
               <PopoverTrigger
                 render={
                   <SidebarMenuButton
+                    aria-label={isCollapsed ? displayName : undefined}
                     className={cn(
                       'h-auto gap-2.5 rounded-lg px-2.5 py-2.5 text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-foreground',
-                      isCollapsed && 'justify-center'
+                      isCollapsed && 'rounded-full hover:bg-transparent'
                     )}
                   />
                 }
@@ -496,9 +517,9 @@ export function AppSidebar() {
                   </>
                 )}
               </PopoverTrigger>
-              <PopoverContent side="top" align="center" sideOffset={12} className="w-56">
+              <PopoverContent side={isCollapsed ? 'right' : 'top'} align={isCollapsed ? 'end' : 'center'} sideOffset={12} className="w-56">
                 <div className="flex flex-col gap-2 px-1.5 pt-1 pb-2.5">
-                  <span className="text-[10px] font-semibold tracking-wider text-muted-foreground uppercase">Signed in</span>
+                  <span className="text-xs text-muted-foreground">Signed in</span>
                   <div className="min-w-0">
                     <div className="truncate text-sm font-semibold text-foreground">{displayName}</div>
                     <div className="mt-0.5 truncate text-xs text-primary">{roleLabel} · Sallyan House</div>
@@ -508,7 +529,7 @@ export function AppSidebar() {
                 <div className="h-px bg-border" />
 
                 <div className="flex items-center justify-between gap-2 px-1.5 py-2">
-                  <span className="text-[10px] font-semibold tracking-wider text-muted-foreground uppercase">Theme</span>
+                  <span className="text-xs text-muted-foreground">Theme</span>
                   <div className="flex items-center gap-0.5 rounded-md bg-muted p-0.5">
                     <button
                       type="button"

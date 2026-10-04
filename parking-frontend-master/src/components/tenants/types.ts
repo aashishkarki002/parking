@@ -14,6 +14,10 @@ export interface Vendor {
   bike_quota: number;
   gate_access_allowed: boolean;
   stamp_free_minutes: number;
+  // null = falls back to the global Parking Configuration default.
+  tenant_free_hours: number | null;
+  student_early_grace_minutes: number | null;
+  student_late_grace_minutes: number | null;
   external_tenant_id: string | null;
   last_synced_at: string | null;
   sync_source: string | null;

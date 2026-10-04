@@ -1,87 +1,113 @@
-import { useState } from 'react';
-import { ChevronDown } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { formatMinutes, formatMoney, type TenantValidation } from '@/components/reports/metrics';
+import { useMemo, useState, type CSSProperties } from 'react';
+import { Building2 } from 'lucide-react';
+import { InsightCard, ShowMore } from '@/components/reports/ReportPanel';
+import { formatMinutes, formatMoney, type ReportMetrics } from '@/components/reports/metrics';
+import { cn } from '@/lib/utils';
 
-const COLLAPSED_ROWS = 8;
+const TOP = 3;
 
-interface TenantValidationTableProps {
-  tenants: TenantValidation[];
+interface TenantInsightProps {
+  current: ReportMetrics;
   currency: string;
+  className?: string;
 }
 
 /**
- * Who is stamping, how much parking they gave away, and what they owe for the
- * part their stamps did not cover — the tenant-side ledger of validation.
+ * Tenant validation, answered as "who do I need to talk to". If any tenant ran
+ * past what their stamps covered, the amount to bill is the headline, since
+ * that is money to collect. Otherwise the headline is whoever gave away the
+ * most parking. Tenants are ranked by what they owe, then by free time given.
  */
-export function TenantValidationTable({ tenants, currency }: TenantValidationTableProps) {
-  const [expanded, setExpanded] = useState(false);
+export function TenantInsight({ current, currency, className }: TenantInsightProps) {
+  const [open, setOpen] = useState(false);
+  const money = (amount: number) => formatMoney(amount, currency);
 
-  if (tenants.length === 0) {
+  const ranked = useMemo(
+    () =>
+      [...current.tenants].sort(
+        (a, b) => b.amountBilled - a.amountBilled || b.freeMinutesGranted - a.freeMinutesGranted
+      ),
+    [current.tenants]
+  );
+
+  if (ranked.length === 0) {
     return (
-      <p className="rounded-lg border border-dashed border-border px-3 py-6 text-center text-[12.5px] text-muted-foreground">
-        No tickets were validated in this period.
-      </p>
+      <InsightCard
+        className={className}
+        icon={Building2}
+        category="Tenants"
+        tint="var(--chart-4)"
+        headline="No tickets were stamped."
+        detail="Tenants stamp a visitor’s ticket to cover their parking. None did in this period."
+      />
     );
   }
 
-  const rows = expanded ? tenants : tenants.slice(0, COLLAPSED_ROWS);
+  const owing = ranked.filter((t) => t.amountBilled > 0);
+  const totalBilled = owing.reduce((sum, t) => sum + t.amountBilled, 0);
+  const [top] = ranked;
+  const rows = open ? ranked : ranked.slice(0, TOP);
 
   return (
-    <div className="flex flex-col gap-2">
-      <div className="overflow-x-auto rounded-lg border border-border">
-        <table className="w-full border-collapse text-sm">
-          <thead>
-            <tr className="border-b border-border bg-muted/40 text-left text-xs font-medium uppercase text-muted-foreground">
-              <th className="px-3 py-2.5">Tenant</th>
-              <th className="px-3 py-2.5 text-right">Stamps</th>
-              <th className="px-3 py-2.5 text-right">Free given</th>
-              <th className="px-3 py-2.5 text-right">Overage</th>
-              <th className="px-3 py-2.5 text-right">Billed</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((tenant) => (
-              <tr key={tenant.vendor} className="border-b border-border last:border-0">
-                <td className="px-3 py-2.5">
-                  <div className="font-medium text-foreground">{tenant.vendor}</div>
-                  <div className="text-[11.5px] text-muted-foreground">
-                    {tenant.sessionsValidated} validated
-                    {tenant.overageSessions > 0 && ` · ${tenant.overageSessions} over`}
-                  </div>
-                </td>
-                <td className="px-3 py-2.5 text-right font-mono text-[13px] tabular-nums text-foreground">
-                  {tenant.stamps}
-                </td>
-                <td className="px-3 py-2.5 text-right font-mono text-[13px] tabular-nums text-muted-foreground">
-                  {formatMinutes(tenant.freeMinutesGranted)}
-                </td>
-                <td className="px-3 py-2.5 text-right font-mono text-[13px] tabular-nums text-foreground">
-                  {tenant.overageMinutes > 0 ? (
-                    formatMinutes(tenant.overageMinutes)
-                  ) : (
-                    <span className="text-muted-foreground">—</span>
-                  )}
-                </td>
-                <td className="px-3 py-2.5 text-right font-mono text-[13px] font-semibold tabular-nums text-foreground">
-                  {tenant.amountBilled > 0 ? (
-                    formatMoney(tenant.amountBilled, currency)
-                  ) : (
-                    <span className="font-normal text-muted-foreground">—</span>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {tenants.length > COLLAPSED_ROWS && (
-        <Button variant="ghost" size="sm" className="self-center" onClick={() => setExpanded((o) => !o)}>
-          <ChevronDown className={expanded ? 'h-3.5 w-3.5 rotate-180' : 'h-3.5 w-3.5'} />
-          {expanded ? 'Show fewer' : `Show all ${tenants.length} tenants`}
-        </Button>
+    <InsightCard
+      className={className}
+      icon={Building2}
+      category="Tenants"
+      tint="var(--chart-4)"
+      headline={
+        totalBilled > 0 ? (
+          <>
+            {money(totalBilled)} to bill {owing.length === 1 ? top.vendor : `across ${owing.length} tenants`}.
+          </>
+        ) : (
+          <>{top.vendor} gave away the most parking.</>
+        )
+      }
+      detail={
+        <>
+          {ranked.length} {ranked.length === 1 ? 'tenant' : 'tenants'} stamped {current.sessionsValidated}{' '}
+          {current.sessionsValidated === 1 ? 'ticket' : 'tickets'}, giving away{' '}
+          {formatMinutes(current.freeMinutesGranted)}. Time past a stamp is billed to the tenant, never
+          the visitor.
+        </>
+      }
+      action={{ to: '/tenants', label: 'Open tenants' }}
+    >
+      <ul className="-my-2.5 flex flex-col">
+        {rows.map((tenant, index) => (
+          <li
+            key={tenant.vendor}
+            className={cn(
+              'flex items-center justify-between gap-4 border-b border-border/60 py-2.5 last:border-0',
+              index >= TOP && 'scope-fade'
+            )}
+            style={
+              index >= TOP
+                ? ({ '--stagger': `${Math.min(index - TOP, 10) * 30}ms` } as CSSProperties)
+                : undefined
+            }
+          >
+            <div className="flex min-w-0 flex-col">
+              <span className="truncate text-[13.5px] font-medium text-foreground">{tenant.vendor}</span>
+              <span className="truncate text-[12px] tabular-nums text-muted-foreground">
+                {tenant.stamps} {tenant.stamps === 1 ? 'stamp' : 'stamps'},{' '}
+                {formatMinutes(tenant.freeMinutesGranted)} free
+                {tenant.overageMinutes > 0 && `, ${formatMinutes(tenant.overageMinutes)} over`}
+              </span>
+            </div>
+            {tenant.amountBilled > 0 ? (
+              <span className="shrink-0 text-[13.5px] font-semibold tabular-nums text-foreground">
+                {money(tenant.amountBilled)}
+              </span>
+            ) : (
+              <span className="shrink-0 text-[12px] text-muted-foreground">Nothing owed</span>
+            )}
+          </li>
+        ))}
+      </ul>
+      {ranked.length > TOP && (
+        <ShowMore open={open} onToggle={() => setOpen((o) => !o)} count={ranked.length} noun="tenants" />
       )}
-    </div>
+    </InsightCard>
   );
 }

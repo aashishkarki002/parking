@@ -218,7 +218,7 @@ export function GlobalSearch() {
       </button>
 
       <Dialog open={open} onOpenChange={handleOpenChange}>
-        <DialogContent showCloseButton={false} initialFocus={inputRef} className="max-w-xl overflow-hidden">
+        <DialogContent showCloseButton={false} initialFocus={inputRef} className="max-w-xl overflow-hidden transition-none data-starting-style:scale-100 data-starting-style:opacity-100 data-ending-style:scale-100 data-ending-style:opacity-100">
           <DialogTitle className="sr-only">Search</DialogTitle>
           <div className="flex items-center gap-2 border-b border-border px-4">
             <MagnifyingGlassIcon className="h-5 w-5 shrink-0 text-muted-foreground" />
@@ -241,7 +241,7 @@ export function GlobalSearch() {
             {showRecent ? (
               recent.length > 0 ? (
                 <div>
-                  <p className="px-2 pb-1 pt-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  <p className="px-2 pb-1 pt-1.5 text-xs text-muted-foreground">
                     Recent
                   </p>
                   {recent.map((t) => (
@@ -279,7 +279,7 @@ export function GlobalSearch() {
             ) : (
               grouped.map((g) => (
                 <div key={g.type} className="pb-1">
-                  <p className="px-2 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  <p className="px-2 pb-1 pt-2 text-xs text-muted-foreground">
                     {g.label}
                   </p>
                   {g.items.map((r) => {

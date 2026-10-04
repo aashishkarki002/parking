@@ -1,6 +1,9 @@
 import type { ReactNode } from 'react';
 import { cn } from '@/lib/utils';
+import { Skeleton } from '@/components/ui/skeleton';
 
+// Matches the dashboard's KPI strip (KpiCell) so every readout in the app
+// shares one rhythm: quiet label, hero figure, one-line caption.
 export function KpiTile({
   label,
   value,
@@ -13,11 +16,37 @@ export function KpiTile({
   className?: string;
 }) {
   return (
-    <div className={cn('flex flex-col gap-1.5 bg-card p-4', className)}>
-      <span className="text-[10.5px] font-semibold uppercase tracking-[0.09em] text-muted-foreground">{label}</span>
-      <span className="text-[26px] leading-none font-bold tracking-tight tabular-nums text-foreground">{value}</span>
-      <span className="text-xs text-muted-foreground">{caption}</span>
+    <div className={cn('flex min-w-0 flex-col gap-2 bg-card p-4 sm:p-5', className)}>
+      <span className="truncate text-[13px] text-muted-foreground">{label}</span>
+      <span className="truncate text-2xl leading-none font-semibold tracking-tight tabular-nums text-foreground">
+        {value}
+      </span>
+      <span className="truncate text-xs text-muted-foreground">{caption}</span>
     </div>
+  );
+}
+
+// Loading stand-in with the same box as KpiTile, so the strip does not jump
+// when the figures arrive.
+export function KpiTileSkeleton() {
+  return (
+    <div className="flex flex-col gap-2 bg-card p-4 sm:p-5">
+      <Skeleton className="h-[19.5px] w-20" />
+      <Skeleton className="h-6 w-16" />
+      <Skeleton className="h-4 w-28" />
+    </div>
+  );
+}
+
+// "used/quota" with the denominator stepped back, so the eye lands on usage.
+// Over-quota reads red; a zero quota (never synced) shows the bare count.
+export function QuotaValue({ used, quota }: { used: number; quota: number }) {
+  if (quota === 0) return <>{used}</>;
+  return (
+    <span className={cn(used > quota && 'text-red-600 dark:text-red-400')}>
+      {used}
+      <span className="text-muted-foreground font-normal">/{quota}</span>
+    </span>
   );
 }
 

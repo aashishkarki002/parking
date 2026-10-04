@@ -73,13 +73,13 @@ export function AddSessionDialog({ open, onOpenChange }: AddSessionDialogProps) 
       <DialogContent showCloseButton={!isLoading} className="max-w-md">
         <form onSubmit={handleSubmit} className="flex flex-col">
           <DialogHeader>
-            <DialogTitle>Add parking session</DialogTitle>
+            <DialogTitle>New session</DialogTitle>
             <DialogDescription>Open a new ticket for a vehicle entering now.</DialogDescription>
           </DialogHeader>
 
           <div className="flex flex-col gap-4 px-5 py-4">
             <div className="flex flex-col gap-1.5">
-              <label className="text-[10px] font-semibold tracking-[0.09em] text-muted-foreground uppercase">
+              <label className="text-[13px] font-medium text-foreground">
                 Vehicle type
               </label>
               <div className="flex flex-wrap gap-2">
@@ -95,9 +95,9 @@ export function AddSessionDialog({ open, onOpenChange }: AddSessionDialogProps) 
                       type="button"
                       onClick={() => setVehicleTypeId(vt.id)}
                       className={cn(
-                        'inline-flex h-9 items-center gap-2 rounded-lg border px-3.5 text-[13px] font-semibold transition-colors',
+                        'inline-flex h-9 items-center gap-2 rounded-lg border px-3.5 text-[13px] font-medium transition-[color,background-color,border-color,transform] duration-150 ease-out active:scale-[0.97] motion-reduce:active:scale-100',
                         active
-                          ? 'border-primary/30 bg-accent text-accent-foreground'
+                          ? 'border-foreground/80 bg-background text-foreground shadow-sm'
                           : 'border-border bg-card text-muted-foreground hover:text-foreground'
                       )}
                     >
@@ -110,14 +110,14 @@ export function AddSessionDialog({ open, onOpenChange }: AddSessionDialogProps) 
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <label className="text-[10px] font-semibold tracking-[0.09em] text-muted-foreground uppercase">
-                Plate number <span className="font-medium text-muted-foreground/70 normal-case">optional</span>
+              <label className="text-[13px] font-medium text-foreground">
+                Plate number <span className="font-normal text-muted-foreground">(optional)</span>
               </label>
               <Input
                 value={plate}
                 onChange={(e) => setPlate(e.target.value.toUpperCase())}
                 placeholder="BA 1 PA 7788"
-                className="font-mono font-bold tracking-wide uppercase"
+                className="h-9 font-medium tracking-wide uppercase tabular-nums"
               />
             </div>
           </div>

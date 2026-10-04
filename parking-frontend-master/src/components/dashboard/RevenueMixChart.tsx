@@ -1,6 +1,5 @@
-import { TrendingDown, TrendingUp } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, XAxis } from 'recharts';
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   ChartContainer,
@@ -22,12 +21,12 @@ export function RevenueMixChartSkeleton({ bars = 7 }: { bars?: number }) {
     <Card>
       <CardHeader className="flex flex-col gap-1 p-4 pb-2 sm:p-6 sm:pb-3">
         <Skeleton className="h-4 w-32" />
-        <Skeleton className="h-3.5 w-52" />
+        <Skeleton className="h-3 w-44" />
       </CardHeader>
       <CardContent className="p-4 pt-2 sm:p-6 sm:pt-2">
         <div className="flex h-[220px] items-end justify-between gap-2 border-b border-border px-1 pb-6">
           {heights.map((h, i) => (
-            <Skeleton key={i} className="w-full rounded-t-md rounded-b-none" style={{ height: `${h}%` }} />
+            <Skeleton key={i} className="w-full rounded-t-sm rounded-b-none" style={{ height: `${h}%` }} />
           ))}
         </div>
         <div className="mt-2 flex justify-center gap-4">
@@ -35,10 +34,6 @@ export function RevenueMixChartSkeleton({ bars = 7 }: { bars?: number }) {
           <Skeleton className="h-3 w-20" />
         </div>
       </CardContent>
-      <CardFooter className="flex-col items-start gap-1 p-4 pt-0 text-sm sm:p-6 sm:pt-0">
-        <Skeleton className="h-4 w-64" />
-        <Skeleton className="mt-1 h-3.5 w-48" />
-      </CardFooter>
     </Card>
   );
 }
@@ -76,38 +71,35 @@ export function RevenueMixChart({
   comparisonLabel,
   bucketNoun,
 }: RevenueMixChartProps) {
-  const shareUp = digitalShareDeltaPts >= 0;
-  const TrendIcon = shareUp ? TrendingUp : TrendingDown;
-
   return (
     <Card>
-      <CardHeader className="flex flex-col gap-1 p-4 pb-2 sm:p-6 sm:pb-3">
-        <CardTitle className="text-base font-semibold text-foreground">Revenue by {bucketNoun}</CardTitle>
-        <CardDescription>
-          {scopeLabel.charAt(0).toUpperCase() + scopeLabel.slice(1)}, split by payment method
-        </CardDescription>
+      <CardHeader className="flex flex-row items-start justify-between gap-4 p-4 pb-2 sm:p-6 sm:pb-3">
+        <div className="flex flex-col gap-1">
+          <CardTitle className="text-sm font-medium text-foreground">Revenue by {bucketNoun}</CardTitle>
+          <CardDescription className="text-xs">Cash and online / QR, {scopeLabel}</CardDescription>
+        </div>
+        <div className="text-right">
+          <div className="text-base font-semibold tabular-nums text-foreground">{formatNRs(total)}</div>
+          <div className="text-xs tabular-nums text-muted-foreground" title={`Online share vs ${comparisonLabel}`}>
+            {digitalSharePct.toFixed(0)}% online
+            <span className="mx-1 opacity-40">·</span>
+            {digitalShareDeltaPts >= 0 ? '+' : '−'}
+            {Math.abs(digitalShareDeltaPts).toFixed(1)} pts
+          </div>
+        </div>
       </CardHeader>
       <CardContent className="p-4 pt-2 sm:p-6 sm:pt-2">
         <ChartContainer config={revenueChartConfig} className="aspect-auto h-[220px] w-full">
           <BarChart accessibilityLayer data={data}>
             <CartesianGrid vertical={false} />
             <XAxis dataKey="label" tickLine={false} tickMargin={10} axisLine={false} interval="preserveStartEnd" />
-            <ChartTooltip content={<ChartTooltipContent indicator="dot" />} />
+            <ChartTooltip isAnimationActive={false} content={<ChartTooltipContent indicator="dot" />} />
             <ChartLegend content={<ChartLegendContent />} />
-            <Bar dataKey="cash" stackId="revenue" fill="var(--color-cash)" radius={[0, 0, 4, 4]} />
-            <Bar dataKey="digital" stackId="revenue" fill="var(--color-digital)" radius={[4, 4, 0, 0]} />
+            <Bar dataKey="cash" stackId="revenue" fill="var(--color-cash)" radius={[0, 0, 2, 2]} maxBarSize={40} animationDuration={500} animationEasing="ease-out" />
+            <Bar dataKey="digital" stackId="revenue" fill="var(--color-digital)" radius={[2, 2, 0, 0]} maxBarSize={40} animationDuration={500} animationEasing="ease-out" />
           </BarChart>
         </ChartContainer>
       </CardContent>
-      <CardFooter className="flex-col items-start gap-1 p-4 pt-0 text-sm sm:p-6 sm:pt-0">
-        <div className="flex items-center gap-2 leading-none font-medium text-foreground">
-          Digital share {shareUp ? 'up' : 'down'} {Math.abs(digitalShareDeltaPts).toFixed(1)} pts vs {comparisonLabel}
-          <TrendIcon className="h-4 w-4" />
-        </div>
-        <div className="leading-none text-muted-foreground">
-          {formatNRs(total)} collected {scopeLabel} — {digitalSharePct.toFixed(0)}% online/QR
-        </div>
-      </CardFooter>
     </Card>
   );
 }

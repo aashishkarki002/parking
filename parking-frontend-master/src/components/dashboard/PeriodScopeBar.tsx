@@ -5,10 +5,15 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { cn } from '@/lib/utils';
 import { PRESETS, toISODate, type PresetKey, type ResolvedScope, type Scope } from './scope';
 
-// Smooth settle, no overshoot — the tap carried no momentum of its own, so an
-// elastic pill would be inventing physics that the gesture never had.
-const PILL_EASE = 'cubic-bezier(0.32, 0.72, 0, 1)';
-const PILL_MS = 340;
+// The pill moves across the control, so it eases in and out; no overshoot —
+// the tap carried no momentum of its own.
+const PILL_EASE = 'cubic-bezier(0.77, 0, 0.175, 1)';
+const PILL_MS = 250;
+
+// Shared by the real segments and the "active" copy laid over them, so the two
+// line up to the pixel.
+const LIST_LAYOUT = 'grid h-8 w-full grid-cols-4 items-center gap-0.5 rounded-lg p-0.5 sm:inline-flex sm:w-auto';
+const ITEM_LAYOUT = 'flex h-7 select-none items-center justify-center rounded-md px-3 text-[13px] font-medium leading-none';
 
 const QUICK_RANGES: { label: string; build: () => { start: string; end: string } }[] = [
   {
@@ -49,9 +54,9 @@ interface PeriodScopeBarProps {
  * The dashboard's scope bar: four presets as a segmented control, the window
  * they resolve to spelled out beside them, and a custom-range escape hatch.
  *
- * Sits directly above the figures it governs rather than in the page header —
- * a control belongs next to what it changes, and up there it read as governing
- * the whole page, including the session list it has no say over.
+ * It governs everything below it — figures, charts and the session list — so
+ * it sits at the top of the content, right-aligned like any page-level filter,
+ * with the window it resolves to named on the left where reading starts.
  */
 export function PeriodScopeBar({ scope, onScopeChange, resolved }: PeriodScopeBarProps) {
   const isCustom = scope.kind === 'custom';
@@ -59,7 +64,8 @@ export function PeriodScopeBar({ scope, onScopeChange, resolved }: PeriodScopeBa
 
   const listRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
-  const [pill, setPill] = useState<{ left: number; width: number } | null>(null);
+  // The active segment's box as insets from the list's edges.
+  const [pill, setPill] = useState<{ left: number; right: number } | null>(null);
   // The pill must not slide in from the origin on first paint — it should just
   // be where it belongs. Animation is only for a change the user caused.
   const [animate, setAnimate] = useState(false);
@@ -74,7 +80,7 @@ export function PeriodScopeBar({ scope, onScopeChange, resolved }: PeriodScopeBa
       }
       const listBox = list.getBoundingClientRect();
       const itemBox = item.getBoundingClientRect();
-      setPill({ left: itemBox.left - listBox.left, width: itemBox.width });
+      setPill({ left: itemBox.left - listBox.left, right: listBox.right - itemBox.right });
     };
 
     measure();
@@ -106,28 +112,21 @@ export function PeriodScopeBar({ scope, onScopeChange, resolved }: PeriodScopeBa
   };
 
   return (
-    <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-2">
-      <div className="flex w-full items-center gap-2 sm:w-auto">
+    <div className="mb-4 flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+      <p className="min-w-0 truncate text-xs leading-tight text-muted-foreground">
+        <span className="font-medium tabular-nums text-foreground/80">{resolved.rangeLabel}</span>
+        <span className="mx-1.5 opacity-40">·</span>
+        compared with {resolved.comparisonLabel}
+      </p>
+
+      <div className="flex w-full items-center gap-2 sm:w-auto sm:shrink-0">
         <div
           ref={listRef}
           role="radiogroup"
           aria-label="Time range"
           onKeyDown={onKeyDown}
-          className="relative grid h-8 w-full grid-cols-4 items-center gap-0.5 rounded-full border border-border bg-muted/40 p-0.5 sm:inline-flex sm:w-auto"
+          className={cn('group relative bg-muted', LIST_LAYOUT)}
         >
-          {pill && (
-            <span
-              aria-hidden
-              className="pointer-events-none absolute left-0 top-0.5 bottom-0.5 rounded-full bg-primary shadow-sm motion-reduce:!transition-none"
-              style={{
-                transform: `translateX(${pill.left}px)`,
-                width: pill.width,
-                transition: animate
-                  ? `transform ${PILL_MS}ms ${PILL_EASE}, width ${PILL_MS}ms ${PILL_EASE}`
-                  : undefined,
-              }}
-            />
-          )}
           {PRESETS.map((preset, i) => {
             const selected = i === activeIndex;
             return (
@@ -142,26 +141,53 @@ export function PeriodScopeBar({ scope, onScopeChange, resolved }: PeriodScopeBa
                 tabIndex={selected || (activeIndex < 0 && i === 0) ? 0 : -1}
                 onClick={() => selectPreset(preset.key)}
                 className={cn(
-                  'relative z-10 flex h-7 select-none items-center justify-center rounded-full px-3 text-[13px] font-medium leading-none',
-                  'transition-[color,transform] duration-100 ease-out active:scale-[0.97] motion-reduce:active:scale-100',
-                  'outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background',
-                  selected ? 'text-primary-foreground' : 'text-muted-foreground hover:text-foreground'
+                  ITEM_LAYOUT,
+                  'text-muted-foreground transition-[color,transform] duration-100 ease-out hover:text-foreground active:scale-[0.97] motion-reduce:active:scale-100',
+                  'outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background'
                 )}
               >
                 {preset.label}
               </button>
             );
           })}
+
+          {/* The selected state is a copy of the segments styled as active,
+              clipped down to the active one. Sliding the clip moves the pill
+              and its label color as one thing — no width animation, and no
+              text color racing the pill. Inset by 1px less so the ring shows. */}
+          {pill && (
+            <div
+              aria-hidden
+              className={cn(
+                'pointer-events-none absolute inset-0 motion-reduce:!transition-none',
+                LIST_LAYOUT
+              )}
+              style={{
+                clipPath: `inset(1px ${pill.right - 1}px 1px ${pill.left - 1}px round 7px)`,
+                transition: animate ? `clip-path ${PILL_MS}ms ${PILL_EASE}` : undefined,
+              }}
+            >
+              {PRESETS.map((preset, i) => (
+                <span
+                  key={preset.key}
+                  className={cn(
+                    ITEM_LAYOUT,
+                    'bg-background text-foreground shadow-sm ring-1 ring-border/60',
+                    // The copy covers the focused segment, so it draws the focus
+                    // ring too — inside its box, where the clip can't cut it.
+                    i === activeIndex && 'group-has-[:focus-visible]:outline-2 group-has-[:focus-visible]:-outline-offset-2 group-has-[:focus-visible]:outline-ring'
+                  )}
+                >
+                  {preset.label}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
 
         <CustomRangePopover scope={scope} onScopeChange={onScopeChange} />
       </div>
 
-      <p className="min-w-0 text-xs leading-tight text-muted-foreground">
-        <span className="font-medium tabular-nums text-foreground/80">{resolved.rangeLabel}</span>
-        <span className="mx-1.5 opacity-40">·</span>
-        compared with {resolved.comparisonLabel}
-      </p>
     </div>
   );
 }
@@ -191,12 +217,11 @@ function CustomRangePopover({
         render={
           <Button
             // When a custom range is in effect no segment is lit, so this
-            // button is the only thing carrying the selection — it wears the
-            // same pill as a selected segment rather than a faint tint.
-            variant={isCustom ? 'default' : 'outline'}
+            // button is the only thing carrying the selection, so it fills in.
+            variant={isCustom ? 'secondary' : 'outline'}
             size="sm"
             aria-label="Custom date range"
-            className="h-8 shrink-0 gap-1.5 rounded-full px-3 text-[13px] font-medium"
+            className="h-8 shrink-0 gap-1.5 rounded-lg px-3 text-[13px] font-medium"
           />
         }
       >

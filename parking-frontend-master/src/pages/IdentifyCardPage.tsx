@@ -1,13 +1,26 @@
-import { forwardRef, useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { forwardRef, useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import dayjs from 'dayjs';
-import { ArrowUpRight, Motorbike, Car, Keyboard, Loader2, Nfc } from 'lucide-react';
+import {
+  Car,
+  ChevronRight,
+  CircleCheck,
+  CircleX,
+  History,
+  Keyboard,
+  Loader2,
+  Motorbike,
+  Nfc,
+  TriangleAlert,
+  UserRound,
+  type LucideIcon,
+} from 'lucide-react';
 import { useLazyRfidLookupQuery } from '@/app/(public)/(pages)/home/_redux/api';
 import { PageShell } from '@/components/PageShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { UNASSIGNED_KEY } from '@/components/tenants/types';
-import { pressCard, rejectCard } from '@/components/tenants/cardMotion';
+import { rejectCard } from '@/components/tenants/cardMotion';
 import useRfidReader from '@/hooks/common/useRfidReader';
 import { useAppSelector } from '@/lib/public/hooks';
 import { loginSelector } from '@/app/(public)/_login/_redux/selector';
@@ -107,12 +120,21 @@ const IdentifyCardPage = () => {
 
   useRfidReader((uid) => void identify(uid));
 
+  // Arriving from Card taps (?uid=…): show that card straight away, then drop
+  // the param so a reload or the next tap isn't pinned to it.
+  const [params, setParams] = useSearchParams();
+  const linkedUid = params.get('uid');
+  useEffect(() => {
+    if (!linkedUid) return;
+    void identify(linkedUid);
+    setParams({}, { replace: true });
+  }, [linkedUid, identify, setParams]);
+
+  // A found card's entrance is its feedback; an unassigned one shakes its head.
   const shownKey = current?.key ?? null;
   const shownFound = current?.result.found ?? null;
   useEffect(() => {
-    if (shownKey === null) return;
-    if (shownFound) pressCard(faceRef.current);
-    else rejectCard(faceRef.current);
+    if (shownKey !== null && shownFound === false) rejectCard(faceRef.current);
   }, [shownKey, shownFound]);
 
   const submitManual = (e: FormEvent) => {
@@ -125,124 +147,214 @@ const IdentifyCardPage = () => {
 
   return (
     <PageShell title="Identify card">
-      <div className="mx-auto flex w-full max-w-md flex-col gap-6 pb-10">
-        <header className="pt-2 text-center">
-          <h2 className="text-[26px] leading-tight font-semibold tracking-tight text-foreground">Whose card is this?</h2>
-          <p className="mt-1.5 text-[15px] text-muted-foreground">
+      <div className="mx-auto w-full max-w-5xl pb-10">
+        <header className="pt-1 pb-6 text-center lg:pb-8">
+          <h2 className="text-[28px] leading-[1.1] font-semibold tracking-[-0.02em] text-foreground">Whose card is this?</h2>
+          <p className="mt-2 text-[15px] leading-normal text-muted-foreground">
             Hold any card to the reader. Nothing is recorded at the gate.
           </p>
         </header>
 
-        <div className="relative">
-          {result ? (
-            <div key={current!.key} className="identify-in">
-              <CardFace ref={faceRef} result={result} tapKey={current!.key} />
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:gap-8">
+          {/* The card and its answer stay in view while the details scroll. */}
+          <div className="flex flex-col gap-4 lg:sticky lg:top-6 lg:self-start">
+            <div className="relative">
+              {result ? (
+                <div key={current!.key} className={result.found ? 'identify-in' : 'identify-swap'}>
+                  <CardFace ref={faceRef} result={result} />
+                </div>
+              ) : (
+                <ReadyFace />
+              )}
+              {pending && (
+                <div className="identify-wait absolute inset-0 flex items-center justify-center rounded-[22px] bg-background/60 backdrop-blur-sm">
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                </div>
+              )}
             </div>
-          ) : (
-            <ReadyFace />
-          )}
-          {pending && (
-            <div className="absolute inset-0 flex items-center justify-center rounded-[22px] bg-background/60 backdrop-blur-sm">
-              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-            </div>
-          )}
-        </div>
 
-        {error && (
-          <p role="alert" className="rounded-2xl bg-red-50 px-4 py-3 text-center text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
-            {error}
-          </p>
-        )}
+            {result?.found && <Verdict key={current!.key} result={result} />}
 
-        {result?.found && (
-          <>
-            <Details result={result} />
-            {canSeeBackOffice && (
-              <Button
-                size="lg"
-                variant="outline"
-                className="h-12 rounded-2xl text-[15px]"
-                onClick={() =>
-                  navigate(
-                    `/tenants?tenant=${encodeURIComponent(String(result.tenant.company_id ?? UNASSIGNED_KEY))}&member=${result.tenant.id}`
-                  )
-                }
+            {error && (
+              <p
+                role="alert"
+                className="rounded-2xl bg-red-500/10 px-4 py-3 text-center text-sm text-red-700 dark:text-red-300"
               >
-                Open member
-                <ArrowUpRight className="h-4 w-4" />
-              </Button>
+                {error}
+              </p>
             )}
-          </>
-        )}
 
-        {result && !result.found && (
-          <p className="text-center text-[15px] text-muted-foreground">
-            This card isn't issued to anyone yet.
-            {canSeeBackOffice && ' Open a member on the Tenants page and tap it there to assign it.'}
-          </p>
-        )}
+            {manualOpen ? (
+              <form onSubmit={submitManual} className="flex w-full gap-2">
+                <Input
+                  autoFocus
+                  inputMode="numeric"
+                  value={manualUid}
+                  onChange={(e) => setManualUid(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Escape' && setManualOpen(false)}
+                  placeholder="Card number, e.g. 0012345678"
+                  className="h-11 rounded-xl font-mono tabular-nums"
+                />
+                <Button type="submit" className="h-11 rounded-xl px-5" disabled={!manualUid.trim()}>
+                  Find
+                </Button>
+              </form>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setManualOpen(true)}
+                className="mx-auto flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium text-primary transition-[background-color,transform] duration-100 hover:bg-primary/5 active:scale-[0.97] active:bg-primary/10"
+              >
+                <Keyboard className="h-4 w-4" />
+                Type the number instead
+              </button>
+            )}
+          </div>
 
-        {recent.length > 1 && (
-          <section>
-            <h3 className="mb-2 px-4 text-[13px] font-medium text-muted-foreground uppercase">Identified just now</h3>
-            <ul className="divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card">
-              {recent.map((r) => (
-                <li key={r.uid}>
-                  <button
-                    type="button"
-                    onClick={() => void identify(r.uid)}
-                    className={cn(
-                      'flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/60',
-                      r.uid === result?.uid && 'bg-muted/60'
+          <div className="flex flex-col gap-6">
+            {result?.found && (
+              <div key={current!.key} className="identify-swap flex flex-col gap-6">
+                <Group title="Details">
+                  <Details result={result} />
+                </Group>
+                <Group>
+                  <ul className="divide-y divide-border">
+                    <li>
+                      <LinkRow
+                        icon={History}
+                        label="See this card's taps"
+                        onClick={() => navigate(`/card-taps?uid=${encodeURIComponent(result.uid)}`)}
+                      />
+                    </li>
+                    {canSeeBackOffice && (
+                      <li>
+                        <LinkRow
+                          icon={UserRound}
+                          label="Open member"
+                          onClick={() =>
+                            navigate(
+                              `/tenants?tenant=${encodeURIComponent(String(result.tenant.company_id ?? UNASSIGNED_KEY))}&member=${result.tenant.id}`
+                            )
+                          }
+                        />
+                      </li>
                     )}
-                  >
-                    <span className={cn('h-2 w-2 shrink-0 rounded-full', r.found ? TONE_DOT[gateVerdict(r).tone] : TONE_DOT.plain)} />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[15px] font-medium text-foreground">
-                        {r.found ? r.tenant.name : 'Unassigned card'}
-                      </span>
-                      <span className="block truncate text-[12.5px] text-muted-foreground">
-                        {r.found ? [r.tenant.license_plate, r.tenant.company].filter(Boolean).join(' · ') : 'Not issued'}
-                      </span>
-                    </span>
-                    <span className="font-mono text-[12.5px] text-muted-foreground tabular-nums">{r.uid}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
+                  </ul>
+                </Group>
+              </div>
+            )}
 
-        <div className="flex flex-col items-center gap-3">
-          {manualOpen ? (
-            <form onSubmit={submitManual} className="flex w-full gap-2">
-              <Input
-                autoFocus
-                inputMode="numeric"
-                value={manualUid}
-                onChange={(e) => setManualUid(e.target.value)}
-                placeholder="Card number, e.g. 0012345678"
-                className="h-11 rounded-xl font-mono tabular-nums"
-              />
-              <Button type="submit" className="h-11 rounded-xl px-5" disabled={!manualUid.trim()}>
-                Find
-              </Button>
-            </form>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setManualOpen(true)}
-              className="flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
-            >
-              <Keyboard className="h-4 w-4" />
-              Type the number instead
-            </button>
-          )}
+            {result && !result.found && (
+              <div key={current!.key} className="identify-swap rounded-2xl bg-card px-5 py-4 ring-1 ring-border">
+                <p className="text-[15px] font-semibold text-foreground">Not issued to anyone</p>
+                <p className="mt-1 text-[14px] leading-relaxed text-muted-foreground">
+                  The gate won't open for this card.
+                  {canSeeBackOffice && ' To assign it, open a member on the Tenants page and tap it there.'}
+                </p>
+              </div>
+            )}
+
+            {recent.length > 0 ? (
+              <Group title="Identified just now">
+                <ul className="divide-y divide-border">
+                  {recent.map((r) => (
+                    <li key={r.uid}>
+                      <button
+                        type="button"
+                        onClick={() => void identify(r.uid)}
+                        aria-current={r.uid === result?.uid || undefined}
+                        className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors duration-100 hover:bg-muted/50 active:bg-muted aria-[current]:bg-muted/60"
+                      >
+                        <span
+                          className={cn('h-2 w-2 shrink-0 rounded-full', r.found ? TONE_DOT[gateVerdict(r).tone] : TONE_DOT.plain)}
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[15px] font-medium text-foreground">
+                            {r.found ? r.tenant.name : 'Unassigned card'}
+                          </span>
+                          <span className="block truncate text-[13px] text-muted-foreground">
+                            {r.found ? [r.tenant.license_plate, r.tenant.company].filter(Boolean).join(' · ') : 'Not issued'}
+                          </span>
+                        </span>
+                        <span className="font-mono text-[12.5px] text-muted-foreground tabular-nums">{r.uid}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </Group>
+            ) : (
+              <div className="hidden flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-border px-6 py-12 text-center lg:flex">
+                <History className="h-5 w-5 text-muted-foreground/70" />
+                <p className="text-[15px] font-medium text-foreground">Nothing read yet</p>
+                <p className="max-w-[16rem] text-[13px] leading-relaxed text-muted-foreground">
+                  Who holds the card, whether the gate will open and the cards you've checked appear here.
+                </p>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </PageShell>
   );
 };
+
+// An inset grouped list, Settings-style: a quiet caption over a single surface.
+function Group({ title, children }: { title?: string; children: ReactNode }) {
+  return (
+    <section>
+      {title && (
+        <h3 className="mb-2 px-4 text-[12px] font-medium tracking-[0.04em] text-muted-foreground uppercase">{title}</h3>
+      )}
+      <div className="overflow-hidden rounded-2xl bg-card ring-1 ring-border">{children}</div>
+    </section>
+  );
+}
+
+function LinkRow({ icon: Icon, label, onClick }: { icon: LucideIcon; label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex w-full items-center gap-3 px-4 py-3 text-left text-[15px] font-medium text-foreground transition-colors duration-100 hover:bg-muted/50 active:bg-muted"
+    >
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+        <Icon className="h-4 w-4" />
+      </span>
+      <span className="flex-1">{label}</span>
+      <ChevronRight className="h-4 w-4 text-muted-foreground/60" />
+    </button>
+  );
+}
+
+const VERDICT_STYLE: Record<Tone, { box: string; icon: LucideIcon }> = {
+  good: { box: 'bg-emerald-500/10 text-emerald-800 dark:text-emerald-300', icon: CircleCheck },
+  warn: { box: 'bg-amber-500/12 text-amber-900 dark:text-amber-300', icon: TriangleAlert },
+  bad: { box: 'bg-red-500/10 text-red-800 dark:text-red-300', icon: CircleX },
+  plain: { box: 'bg-muted text-foreground', icon: CircleCheck },
+};
+
+// The one question this page exists to answer, said right under the card.
+function Verdict({ result }: { result: FoundCard }) {
+  const { label, tone } = gateVerdict(result);
+  const { box, icon: Icon } = VERDICT_STYLE[tone];
+  return (
+    <div role="status" className={cn('identify-follow flex items-center gap-3 rounded-2xl px-4 py-3.5', box)}>
+      <Icon className="h-5 w-5 shrink-0" />
+      <div className="min-w-0">
+        <p className="text-[15px] leading-tight font-semibold">
+          {tone === 'good' ? 'The gate will open' : "The gate won't open"}
+        </p>
+        <p className="mt-0.5 text-[13px] opacity-80">
+          {tone === 'good'
+            ? result.parked_since
+              ? `Parked since ${whenLabel(result.parked_since)}`
+              : 'Active card and subscription'
+            : label}
+        </p>
+      </div>
+    </div>
+  );
+}
 
 // Waiting for a tap: a blank card outline with the reader glyph breathing.
 function ReadyFace() {
@@ -261,12 +373,7 @@ function ReadyFace() {
   );
 }
 
-interface CardFaceProps {
-  result: LookupResult;
-  tapKey: number;
-}
-
-const CardFace = forwardRef<HTMLDivElement, CardFaceProps>(function CardFace({ result, tapKey }, ref) {
+const CardFace = forwardRef<HTMLDivElement, { result: LookupResult }>(function CardFace({ result }, ref) {
   if (!result.found) {
     return (
       <div
@@ -296,10 +403,6 @@ const CardFace = forwardRef<HTMLDivElement, CardFaceProps>(function CardFace({ r
     >
       <div className="pointer-events-none absolute inset-0 bg-linear-to-br from-white/15 via-transparent to-black/35" />
       <div className="pointer-events-none absolute -top-16 -right-12 h-44 w-44 rounded-full bg-white/10" />
-      <div key={tapKey} aria-hidden className="pointer-events-none absolute inset-0">
-        <span className="tap-ring" />
-        <span className="tap-ring" />
-      </div>
 
       <div className="relative flex items-center justify-between">
         <span className="text-xs font-medium text-white/75">{result.tenant.company ?? 'Tenant card'}</span>
@@ -333,9 +436,7 @@ const CardFace = forwardRef<HTMLDivElement, CardFaceProps>(function CardFace({ r
 });
 
 function Details({ result }: { result: FoundCard }) {
-  const verdict = gateVerdict(result);
   const rows: { label: string; value: string; tone?: Tone }[] = [
-    { label: 'At the gate', value: verdict.label, tone: verdict.tone },
     {
       label: 'Subscription',
       value: result.subscription.valid_until ? `Until ${formatDate(result.subscription.valid_until)}` : 'None',
@@ -358,7 +459,7 @@ function Details({ result }: { result: FoundCard }) {
   }
 
   return (
-    <dl className="divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card">
+    <dl className="divide-y divide-border">
       {rows.map((row) => (
         <div key={row.label} className="flex items-center justify-between gap-4 px-4 py-3">
           <dt className="shrink-0 text-[15px] text-muted-foreground">{row.label}</dt>

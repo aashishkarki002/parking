@@ -3,6 +3,7 @@ import RootPage from './pages/RootPage';
 import DashboardPage from './pages/DashboardPage';
 import PropertiesPage from './pages/PropertiesPage';
 import SessionsPage from './pages/SessionsPage';
+import SessionDetailPage from './pages/SessionDetailPage';
 import TenantsPage from './pages/TenantsPage';
 import SubscriptionsPage from './pages/SubscriptionsPage';
 import BillingPage from './pages/BillingPage';
@@ -14,6 +15,7 @@ import ManageOperatorsPage from './pages/ManageOperatorsPage';
 import ReportsPage from './pages/ReportsPage';
 import RfidTodayPage from './pages/RfidTodayPage';
 import IdentifyCardPage from './pages/IdentifyCardPage';
+import CardTapsPage from './pages/CardTapsPage';
 import MaintenancePage from './pages/MaintenancePage';
 import TenantPortalPage from './pages/TenantPortalPage';
 import StudentRequestsPage from './pages/StudentRequestsPage';
@@ -35,8 +37,10 @@ function App() {
       <Route path="/reports" element={<RequireRole roles={ADMIN_UP}><ReportsPage /></RequireRole>} />
       <Route path="/properties" element={<RequireRole roles={ADMIN_UP}><PropertiesPage /></RequireRole>} />
       <Route path="/sessions" element={<RequireRole roles={POS_UP}><SessionsPage /></RequireRole>} />
+      <Route path="/sessions/:ticket" element={<RequireRole roles={POS_UP}><SessionDetailPage /></RequireRole>} />
       <Route path="/tenant-gate-today" element={<RequireRole roles={POS_UP}><RfidTodayPage /></RequireRole>} />
       <Route path="/identify-card" element={<RequireRole roles={POS_UP}><IdentifyCardPage /></RequireRole>} />
+      <Route path="/card-taps" element={<RequireRole roles={POS_UP}><CardTapsPage /></RequireRole>} />
       <Route path="/tenants" element={<RequireRole roles={ADMIN_UP}><TenantsPage /></RequireRole>} />
       <Route path="/student-requests" element={<RequireRole roles={ADMIN_UP}><StudentRequestsPage /></RequireRole>} />
       <Route path={TENANT_LOGIN} element={<TenantLoginPage />} />

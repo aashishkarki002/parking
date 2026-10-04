@@ -15,6 +15,7 @@ const AppTextField = ({
   bgColor,
   error,
   autoFocus,
+  autoComplete = 'new-password',
   hasError,
   resError,
   handleDefaultFocus,
@@ -50,7 +51,7 @@ const AppTextField = ({
       fullWidth
       id={id ?? name}
       name={name}
-      autoComplete="new-password"
+      autoComplete={autoComplete}
       onFocus={handleDefaultFocus}
       InputProps={{
         readOnly: readOnly,

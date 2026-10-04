@@ -45,6 +45,7 @@ export const baseApiSlice = createApi({
     'publicSearch',
     'Search',
     'Staff',
+    'Vendors',
     'Sessions',
     'ParkingPasses',
     'PricingPlans',

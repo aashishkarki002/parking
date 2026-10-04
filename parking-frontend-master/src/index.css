@@ -241,13 +241,37 @@ a {
   }
 }
 
+/* --stagger offsets sections that arrive together, so the eye lands on the
+   KPI strip first and follows the page down instead of taking it all at once. */
 .scope-fade {
-  animation: scope-fade-in 260ms cubic-bezier(0.32, 0.72, 0, 1);
+  animation: scope-fade-in 250ms cubic-bezier(0.23, 1, 0.32, 1) var(--stagger, 0ms) both;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .scope-fade {
-    animation: scope-fade-in-flat 160ms ease-out;
+    animation: scope-fade-in-flat 160ms ease-out var(--stagger, 0ms) both;
+  }
+}
+
+/* Proportion bars reveal left to right on arrival. clip-path rather than
+   scaleX: a scaled bar squashes its rounded ends mid-flight, a clipped one keeps
+   its shape and is simply uncovered. --bar-delay staggers sibling bars. */
+@keyframes bar-reveal {
+  from {
+    clip-path: inset(0 100% 0 0);
+  }
+  to {
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+.bar-reveal {
+  animation: bar-reveal 280ms cubic-bezier(0.23, 1, 0.32, 1) var(--bar-delay, 0ms) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bar-reveal {
+    animation: scope-fade-in-flat 160ms ease-out var(--bar-delay, 0ms) both;
   }
 }
 
@@ -301,10 +325,12 @@ a {
   animation-delay: 140ms;
 }
 
-/* Identify page: a card rising into place when it's read. */
+/* Identify page. Cards are read here all day, so each read is a short bridge,
+   not a show: the new card settles in, its verdict follows a beat later, and
+   the details cross-fade instead of hard-swapping. */
 @keyframes identify-in {
   from {
-    transform: translateY(14px) scale(0.96);
+    transform: translateY(8px) scale(0.98);
     opacity: 0;
   }
   to {
@@ -314,12 +340,27 @@ a {
 }
 
 .identify-in {
-  animation: identify-in 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: identify-in 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.identify-follow {
+  animation: identify-in 240ms cubic-bezier(0.22, 1, 0.36, 1) 60ms both;
+}
+
+.identify-swap {
+  animation: scope-fade-in-flat 180ms ease-out both;
+}
+
+/* Lookups are usually instant; the spinner only shows up if one isn't, so a
+   fast read never flashes an overlay. */
+.identify-wait {
+  animation: scope-fade-in-flat 150ms ease-out 200ms both;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .identify-in {
-    animation: none;
+  .identify-in,
+  .identify-follow {
+    animation: scope-fade-in-flat 160ms ease-out both;
   }
 }
 

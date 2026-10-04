@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { Link, Navigate, useNavigate } from 'react-router-dom';
+import {  Navigate, useNavigate } from 'react-router-dom';
 import { EyeIcon, EyeSlashIcon } from '@heroicons/react/24/outline';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -8,7 +8,6 @@ import { useAppDispatch, useAppSelector } from '@/lib/public/hooks';
 import { usePublicLoginMutation } from '@/app/(public)/_login/_redux/api';
 import { loginSelector } from '@/app/(public)/_login/_redux/selector';
 import { loginSuccess } from '@/app/(public)/_login/_redux/slice';
-import { HOME } from '@/constants/public/routes';
 import { defaultRouteForUser, isTenantUser, TENANT_PORTAL } from '@/lib/public/roles';
 
 const labelClassName = 'text-[13px] font-medium text-foreground';

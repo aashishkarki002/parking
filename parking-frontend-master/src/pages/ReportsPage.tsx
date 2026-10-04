@@ -1,51 +1,55 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState } from 'react';
 import { ChartBarIcon } from '@heroicons/react/24/outline';
 import { PageShell } from '@/components/PageShell';
 import { EmptyState } from '@/components/EmptyState';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { PeriodScopeBar } from '@/components/dashboard/PeriodScopeBar';
-import { inRange, resolveScope, type Scope } from '@/components/dashboard/scope';
+import { planBuckets, resolveScope, type Scope } from '@/components/dashboard/scope';
 import { RevenueHeadline } from '@/components/reports/RevenueHeadline';
-import { LossBreakdown } from '@/components/reports/LossBreakdown';
-import { PassEconomics } from '@/components/reports/PassEconomics';
-import { TrafficSection } from '@/components/reports/TrafficSection';
-import { TenantValidationTable } from '@/components/reports/TenantValidationTable';
-import {
-  computeMetrics,
-  formatMinutes,
-  formatMoney,
-  type ReportSession,
-} from '@/components/reports/metrics';
-import { passFeesInWindow, type PassRow } from '@/components/reports/passes';
-import {
-  useGetParkingPassesQuery,
-  useGetSessionsQuery,
-} from '@/app/(public)/(pages)/home/_redux/api';
+import { LeakInsight } from '@/components/reports/LossBreakdown';
+import { PassInsight } from '@/components/reports/PassEconomics';
+import { TrafficInsight } from '@/components/reports/TrafficSection';
+import { TenantInsight } from '@/components/reports/TenantValidationTable';
+import { useGetReportSummaryQuery } from '@/app/(public)/(pages)/home/_redux/api';
 import { useGetConfigurationQuery } from '@/app/(public)/(pages)/settings/_redux/api';
+import { cn } from '@/lib/utils';
 
-const NONE: never[] = [];
-
-// One section, one question. The title is the question answered; the line under
-// it is the caveat a reader needs before trusting the numbers — never a second
-// helping of figures, which is what buried the old layout.
-function Section({
-  title,
-  hint,
-  children,
-}: {
-  title: string;
-  hint: ReactNode;
-  children: ReactNode;
-}) {
+// Placeholders shaped like the page they stand in for: the headline block,
+// the loss / pass pair, then the two full-width panels.
+function ReportsSkeleton() {
   return (
-    <Card>
-      <CardHeader className="flex-col items-start gap-1">
-        <CardTitle className="text-[15px] font-semibold text-foreground">{title}</CardTitle>
-        <CardDescription className="text-[12.5px] leading-snug">{hint}</CardDescription>
-      </CardHeader>
-      <CardContent>{children}</CardContent>
-    </Card>
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-6 rounded-xl border border-border bg-card p-5 sm:p-6">
+        <div className="flex items-center justify-between gap-10">
+          <div className="flex flex-col gap-2.5">
+            <Skeleton className="h-3.5 w-44" />
+            <Skeleton className="h-12 w-64" />
+            <Skeleton className="h-3.5 w-36" />
+          </div>
+          <Skeleton className="hidden h-28 w-28 rounded-full sm:block" />
+        </div>
+        <Skeleton className="h-2.5 w-full rounded-full" />
+        <div className="grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-2">
+          {Array.from({ length: 4 }, (_, i) => (
+            <div key={i} className="flex items-center justify-between gap-3">
+              <Skeleton className="h-3.5 w-36" />
+              <Skeleton className="h-4 w-20" />
+            </div>
+          ))}
+        </div>
+      </div>
+      <Skeleton className="mt-2 h-6 w-28" />
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        {Array.from({ length: 4 }, (_, i) => (
+          <div key={i} className="flex flex-col gap-3 rounded-xl border border-border bg-card p-5 sm:p-6">
+            <Skeleton className="h-3.5 w-28" />
+            <Skeleton className="h-5 w-3/4" />
+            <Skeleton className="h-3.5 w-full" />
+            <Skeleton className="mt-3 h-24 w-full" />
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -59,63 +63,57 @@ function Section({
  * minimum-charge uplift, unpaid balance) sits behind the headline's accounting
  * disclosure rather than on the page.
  *
- * Every figure is derived client-side from /parking/sessions — there is no
- * reporting endpoint — so the whole page is one query plus `computeMetrics`.
- * Sessions are scoped by entry time, and each figure is compared against the
- * same elapsed span in the previous period (see scope.ts).
+ * Every figure is computed server-side (management.report_views, a port of
+ * reports/metrics.ts) for the window we resolve here, so the page never
+ * downloads the session list. Sessions are scoped by entry time, and each
+ * figure is compared against the same elapsed span in the previous period
+ * (see scope.ts).
  */
 const ReportsPage = () => {
-  const { data: sessionsData, isLoading, isError } = useGetSessionsQuery(undefined);
-  const { data: passesData } = useGetParkingPassesQuery(undefined);
   const { data: configData } = useGetConfigurationQuery(undefined);
-
-  // An auto_closed session's exit_time is a staff correction, not a real
-  // exit, so it must never feed a duration/usage/revenue figure.
-  const sessions: ReportSession[] = useMemo(
-    () => ((sessionsData ?? NONE) as ReportSession[]).filter((s) => !s.auto_closed),
-    [sessionsData]
-  );
   const currency: string = configData?.currency_symbol ?? 'NRs';
 
   const [scope, setScope] = useState<Scope>({ kind: 'preset', key: 'month' });
   // Sampled once per mount so the window cannot shift mid-render.
   const [now] = useState(() => new Date());
   const resolved = useMemo(() => resolveScope(scope, now), [scope, now]);
+  const buckets = useMemo(() => planBuckets(resolved.start, resolved.end), [resolved]);
 
-  const scoped = useMemo(
-    () => sessions.filter((s) => inRange(s.entry_time, resolved.start, resolved.end)),
-    [sessions, resolved]
+  const summaryArgs = useMemo(
+    () => ({
+      start: resolved.start.toISOString(),
+      end: resolved.end.toISOString(),
+      prev_start: resolved.prevStart.toISOString(),
+      prev_end: resolved.prevEnd.toISOString(),
+      edges: buckets.edges.map((d) => d.toISOString()).join(','),
+    }),
+    [resolved, buckets]
   );
-  const current = useMemo(() => computeMetrics(scoped), [scoped]);
-  // Pass fees belong to a term, not to a day, so they are apportioned to the
-  // window rather than filtered into it (see passes.ts).
-  const passFees = useMemo(
-    () => passFeesInWindow(passesData as PassRow[] | undefined, resolved.start, resolved.end),
-    [passesData, resolved]
-  );
-  const previous = useMemo(
-    () =>
-      computeMetrics(sessions.filter((s) => inRange(s.entry_time, resolved.prevStart, resolved.prevEnd))),
-    [sessions, resolved]
-  );
+  // currentData, not data: on a scope change, show skeletons rather than the
+  // previous window's figures under the new window's labels.
+  const { currentData: summary, isError } = useGetReportSummaryQuery(summaryArgs);
+  const isLoading = !summary && !isError;
 
-  const empty = !isLoading && !isError && current.sessions === 0;
+  const empty = !!summary && summary.current.sessions === 0;
+  const current = summary?.current;
+  const previous = summary?.previous;
+  const passFees = summary?.passFees;
+  const showPasses = !!current && !!passFees && (current.passValue > 0 || passFees.passes > 0);
+  // Remounting on a scope change replays the fade, so the eye catches that the
+  // figures under the same headings now describe a different window.
+  const scopeKey = scope.kind === 'preset' ? scope.key : `${scope.start}_${scope.end}`;
 
   return (
     <PageShell title="Reports">
-      <div className="flex flex-col gap-4">
+      <div className="mx-auto flex w-full max-w-[1400px] flex-col gap-4">
         <PeriodScopeBar scope={scope} onScopeChange={setScope} resolved={resolved} />
 
         {isError ? (
           <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-400">
             Failed to load session data.
           </div>
-        ) : isLoading ? (
-          <div className="flex flex-col gap-4">
-            <Skeleton className="h-56 w-full rounded-xl" />
-            <Skeleton className="h-48 w-full rounded-xl" />
-            <Skeleton className="h-64 w-full rounded-xl" />
-          </div>
+        ) : isLoading || !summary || !current || !previous || !passFees ? (
+          <ReportsSkeleton />
         ) : empty ? (
           <EmptyState
             icon={ChartBarIcon}
@@ -123,62 +121,46 @@ const ReportsPage = () => {
             description="Pick a wider range, or come back once vehicles have entered."
           />
         ) : (
-          <>
-            <RevenueHeadline
-              current={current}
-              previous={previous}
-              currency={currency}
-              passFees={passFees}
-              scopeLabel={resolved.scopeLabel}
-              comparisonLabel={resolved.comparisonLabel}
-            />
+          <div key={scopeKey} className="flex flex-col gap-4">
+            <div className="scope-fade">
+              <RevenueHeadline
+                current={current}
+                previous={previous}
+                currency={currency}
+                passFees={passFees}
+                scopeLabel={resolved.scopeLabel}
+                comparisonLabel={resolved.comparisonLabel}
+              />
+            </div>
 
-            <Section
-              title={
-                current.leakage > 0
-                  ? `Why ${formatMoney(current.leakage, currency)} was given away`
-                  : 'Revenue given away'
-              }
-              hint="Ranked by amount, monthly passes excluded — those were paid for. Each session counts once, against its main cause; free-minute sources interact, so this is not a linear split."
-            >
-              <LossBreakdown causes={current.leakCauses} currency={currency} />
-            </Section>
-
-            {(current.passValue > 0 || passFees.passes > 0) && (
-              <Section
-                title="Monthly passes"
-                hint={`What pass holders' parking was worth at gate rates ${resolved.scopeLabel}, against the fees that covered it.`}
-              >
-                <PassEconomics
-                  current={current}
-                  passFees={passFees}
-                  currency={currency}
-                  scopeLabel={resolved.scopeLabel}
+            {/* Highlights: one card per decision, each led by its takeaway.
+                Ordered by what a manager acts on first: money leaking, money to
+                collect, pricing, then staffing. With no pass card the traffic
+                card takes the full row, so the grid never leaves a hole. */}
+            <div className="scope-fade flex flex-col gap-3 [--stagger:60ms]">
+              <h2 className="px-1 text-[20px] font-semibold tracking-[-0.02em] text-foreground">
+                Highlights
+              </h2>
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                <LeakInsight causes={current.leakCauses} leakage={current.leakage} currency={currency} />
+                <TenantInsight current={current} currency={currency} />
+                {showPasses && (
+                  <PassInsight
+                    current={current}
+                    passFees={passFees}
+                    currency={currency}
+                    scopeLabel={resolved.scopeLabel}
+                  />
+                )}
+                <TrafficInsight
+                  traffic={summary.traffic}
+                  buckets={buckets}
+                  resolved={resolved}
+                  className={cn(!showPasses && 'lg:col-span-2')}
                 />
-              </Section>
-            )}
-
-            <Section
-              title="Tenant validation"
-              hint={
-                current.sessionsValidated > 0 ? (
-                  <>
-                    {current.tenants.length} {current.tenants.length === 1 ? 'tenant' : 'tenants'}{' '}
-                    stamped {current.sessionsValidated}{' '}
-                    {current.sessionsValidated === 1 ? 'ticket' : 'tickets'}, giving away{' '}
-                    {formatMinutes(current.freeMinutesGranted)} of parking. Anything beyond what the
-                    stamps covered is billed to the tenant, never to the visitor.
-                  </>
-                ) : (
-                  'Tenants stamp a visitor’s ticket to cover their parking. Nothing was stamped in this period.'
-                )
-              }
-            >
-              <TenantValidationTable tenants={current.tenants} currency={currency} />
-            </Section>
-
-            <TrafficSection sessions={scoped} resolved={resolved} />
-          </>
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </PageShell>

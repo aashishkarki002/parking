@@ -1,95 +1,102 @@
+import { CreditCard } from 'lucide-react';
+import { InsightCard } from '@/components/reports/ReportPanel';
 import { formatMoney, type ReportMetrics } from '@/components/reports/metrics';
 import type { PassFeeSummary } from '@/components/reports/passes';
-import { cn } from '@/lib/utils';
 
-interface PassEconomicsProps {
+interface PassInsightProps {
   current: ReportMetrics;
   passFees: PassFeeSummary;
   currency: string;
   scopeLabel: string;
+  className?: string;
 }
 
 /**
- * Is the monthly pass priced right?
+ * Is the monthly pass priced right? Answered as a verdict, then shown as two
+ * bars on one scale so the gap the verdict names is the visible difference.
  *
- * Pass parking is not a loss — the fee was paid — but the fee is fixed while
- * usage is not, so the only way to know whether it is priced right is to put the
- * two side by side: what pass holders' parking would have cost at gate rates,
- * against the fees apportioned to the same window. The gap is the subsidy the
- * pass represents, and it is a pricing decision, not leakage.
- *
- * Both figures are estimates in opposite directions — fees are apportioned
- * across terms that straddle the window, and gate value assumes a pass holder
- * would have parked the same way on a ticket — so the card states that rather
- * than presenting the gap as a precise number.
+ * Pass parking is not a loss, since the fee was paid, but the fee is fixed while
+ * usage is not. Both figures are estimates in opposite directions: fees are
+ * apportioned across terms that straddle the window, and gate value assumes a
+ * holder would have parked the same way on a ticket. The gap is a pricing
+ * question, never leakage.
  */
-export function PassEconomics({ current, passFees, currency, scopeLabel }: PassEconomicsProps) {
+export function PassInsight({ current, passFees, currency, scopeLabel, className }: PassInsightProps) {
   const money = (amount: number) => formatMoney(amount, currency);
-
   const gap = current.passValue - passFees.feesEarned;
-  const ratio = passFees.feesEarned > 0 ? current.passValue / passFees.feesEarned : null;
+  const coverPct = current.passValue > 0 ? (passFees.feesEarned / current.passValue) * 100 : null;
+  const scale = Math.max(current.passValue, passFees.feesEarned, 1);
 
-  const facts = [
+  const headline =
+    passFees.passes === 0
+      ? 'No pass fees fall in this window.'
+      : gap > 0
+        ? 'Passes are priced below what holders use.'
+        : 'Passes are paying their way.';
+
+  const detail =
+    passFees.passes === 0 ? (
+      <>Holders still parked {money(current.passValue)} at gate rates {scopeLabel}.</>
+    ) : gap > 0 ? (
+      <>
+        Fees cover {coverPct === null ? 'none' : `${coverPct.toFixed(0)}%`} of the parking holders
+        used at gate rates, a gap of {money(gap)} {scopeLabel}.
+      </>
+    ) : (
+      <>
+        {passFees.passes} {passFees.passes === 1 ? 'pass' : 'passes'} brought in {money(passFees.feesEarned)},
+        more than the {money(current.passValue)} the same parking would cost on tickets.
+      </>
+    );
+
+  const bars = [
     {
       label: 'Used at gate rates',
-      value: money(current.passValue),
-      hint: `${current.passSessions} ${current.passSessions === 1 ? 'session' : 'sessions'} by ${current.passVehicles} ${current.passVehicles === 1 ? 'vehicle' : 'vehicles'}`,
+      value: current.passValue,
+      color: 'var(--chart-2)',
     },
     {
-      label: 'Pass fees for the period',
-      value: money(passFees.feesEarned),
-      hint: `${passFees.passes} ${passFees.passes === 1 ? 'pass' : 'passes'} in force`,
-    },
-    {
-      label: gap >= 0 ? 'Priced below usage by' : 'Priced above usage by',
-      value: money(Math.abs(gap)),
-      hint:
-        ratio === null
-          ? 'No fees recorded for this window'
-          : `Fees cover ${(100 / ratio).toFixed(0)}% of gate value`,
-      emphasis: true,
+      label: 'Fees received',
+      value: passFees.feesEarned,
+      color: 'var(--chart-1)',
     },
   ];
 
   return (
-    <div className="flex flex-col gap-4">
-      <dl className="grid grid-cols-2 gap-4 lg:grid-cols-3">
-        {facts.map((fact) => (
-          <div key={fact.label} className="flex flex-col gap-1">
-            <dt className="text-[12.5px] text-muted-foreground">{fact.label}</dt>
-            <dd
-              className={cn(
-                'text-[17px] font-semibold leading-none tabular-nums text-foreground',
-                fact.emphasis && gap > 0 && 'text-amber-600 dark:text-amber-400'
-              )}
-            >
-              {fact.value}
-              <span className="mt-1 block text-[11.5px] font-normal text-muted-foreground">
-                {fact.hint}
-              </span>
-            </dd>
+    <InsightCard
+      className={className}
+      icon={CreditCard}
+      category="Monthly passes"
+      tint="var(--chart-1)"
+      headline={headline}
+      detail={detail}
+      action={gap > 0 ? { to: '/subscription', label: 'Review pass pricing' } : undefined}
+    >
+      <dl className="flex flex-col gap-3">
+        {bars.map((bar, index) => (
+          <div key={bar.label} className="flex flex-col gap-1.5">
+            <div className="flex items-baseline justify-between gap-3 text-[13px]">
+              <dt className="text-foreground/80">{bar.label}</dt>
+              <dd className="shrink-0 font-semibold tabular-nums text-foreground">{money(bar.value)}</dd>
+            </div>
+            <span className="block h-1.5">
+              <span
+                className="bar-reveal block h-full rounded-full"
+                style={{
+                  width: `${Math.max((bar.value / scale) * 100, 2)}%`,
+                  background: bar.color,
+                  ['--bar-delay' as string]: `${index * 60}ms`,
+                }}
+              />
+            </span>
           </div>
         ))}
       </dl>
-
-      <p className="text-[11.5px] leading-snug text-muted-foreground">
-        {passFees.passes === 0 ? (
-          <>No passes were in force {scopeLabel}, so there are no fees to compare against.</>
-        ) : gap > 0 ? (
-          <>
-            Pass holders parked {money(gap)} more than their fees, measured at gate rates — the
-            subsidy the pass is meant to give, and a pricing question if it keeps widening. A pass
-            fee also buys a guaranteed space, which a gate ticket does not.
-          </>
-        ) : (
-          <>
-            Pass fees came in above what the same parking would have cost on tickets, so the pass is
-            earning its keep {scopeLabel}.
-          </>
-        )}{' '}
-        Fees are apportioned from each pass's term, so a term straddling this window contributes only
-        its overlapping share.
+      <p className="mt-3 text-[11.5px] text-muted-foreground">
+        {current.passSessions} {current.passSessions === 1 ? 'session' : 'sessions'} by{' '}
+        {current.passVehicles} {current.passVehicles === 1 ? 'vehicle' : 'vehicles'}. Fees are counted
+        for the part of each term inside this window.
       </p>
-    </div>
+    </InsightCard>
   );
 }

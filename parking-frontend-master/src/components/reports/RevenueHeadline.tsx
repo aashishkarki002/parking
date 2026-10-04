@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ArrowDown, ArrowUp, ChevronDown } from 'lucide-react';
 import { formatMoney, formatPct, type ReportMetrics } from '@/components/reports/metrics';
 import type { PassFeeSummary } from '@/components/reports/passes';
@@ -17,7 +17,7 @@ const pctChange = (current: number, previous: number) =>
   previous > 0 ? ((current - previous) / previous) * 100 : null;
 
 // Less lost revenue is good news, so the arrow's colour follows `goodWhenDown`
-// rather than the sign — a rising loss figure must never read as green.
+// rather than the sign. A rising loss figure must never read as green.
 function Delta({ value, goodWhenDown = false }: { value: number | null; goodWhenDown?: boolean }) {
   if (value === null || !Number.isFinite(value)) return null;
   const up = value >= 0;
@@ -26,13 +26,92 @@ function Delta({ value, goodWhenDown = false }: { value: number | null; goodWhen
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-0.5 text-[11.5px] font-semibold tabular-nums',
+        'inline-flex items-center gap-0.5 font-semibold tabular-nums',
         good ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500 dark:text-red-400'
       )}
     >
-      <Icon className="h-3 w-3" />
+      <Icon className="h-3 w-3" strokeWidth={2.5} />
       {Math.abs(value).toFixed(0)}%
     </span>
+  );
+}
+
+// A money figure set the way Apple sets a unit beside a reading: the number
+// carries the weight, the currency sits smaller and lighter so the eye lands
+// on the digits first.
+function Amount({ value, currency, className }: { value: number; currency: string; className?: string }) {
+  const digits = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(Math.round(value));
+  return (
+    <span className={cn('inline-flex items-baseline gap-[0.18em] tabular-nums', className)}>
+      <span className="text-[0.42em] font-medium tracking-normal text-muted-foreground">{currency}</span>
+      {digits}
+    </span>
+  );
+}
+
+const RING_SIZE = 112;
+const RING_STROKE = 12;
+const RING_RADIUS = (RING_SIZE - RING_STROKE) / 2;
+const RING_LENGTH = 2 * Math.PI * RING_RADIUS;
+
+/**
+ * Capture rate as an Activity-style ring: the chargeable value is the goal, and
+ * the ring closes as more of it was actually collected. A completion question
+ * gets a completion shape, which a bare percentage does not convey at a glance.
+ *
+ * The track is the same hue at low strength, as on the Watch, so the ring reads
+ * as one object partially filled rather than two colours side by side. It fills
+ * once on arrival from empty, on a critically damped curve: no overshoot,
+ * because nothing the user did carried momentum.
+ */
+function CaptureRing({ pct }: { pct: number }) {
+  const [filled, setFilled] = useState(false);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setFilled(true));
+    return () => cancelAnimationFrame(frame);
+  }, []);
+  const clamped = Math.min(Math.max(pct, 0), 100);
+  const offset = RING_LENGTH * (1 - (filled ? clamped : 0) / 100);
+
+  return (
+    <div className="relative grid shrink-0 place-items-center" style={{ width: RING_SIZE, height: RING_SIZE }}>
+      <svg
+        width={RING_SIZE}
+        height={RING_SIZE}
+        viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`}
+        className="-rotate-90"
+        role="img"
+        aria-label={`${formatPct(pct)} of chargeable value collected`}
+      >
+        <circle
+          cx={RING_SIZE / 2}
+          cy={RING_SIZE / 2}
+          r={RING_RADIUS}
+          fill="none"
+          stroke={COLLECTED}
+          strokeOpacity={0.16}
+          strokeWidth={RING_STROKE}
+        />
+        <circle
+          cx={RING_SIZE / 2}
+          cy={RING_SIZE / 2}
+          r={RING_RADIUS}
+          fill="none"
+          stroke={COLLECTED}
+          strokeWidth={RING_STROKE}
+          strokeLinecap="round"
+          strokeDasharray={RING_LENGTH}
+          strokeDashoffset={offset}
+          className="transition-[stroke-dashoffset] duration-[900ms] ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none"
+        />
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center">
+        <span className="text-[22px] font-semibold leading-none tracking-[-0.02em] tabular-nums text-foreground">
+          {formatPct(pct)}
+        </span>
+        <span className="mt-1 text-[11px] font-medium text-muted-foreground">captured</span>
+      </div>
+    </div>
   );
 }
 
@@ -119,7 +198,7 @@ export function RevenueHeadline({
     {
       label: 'Pass-covered value',
       value: money(current.passValue),
-      hint: `${current.passSessions} sessions on a monthly pass — paid for, not lost`,
+      hint: `${current.passSessions} sessions on a monthly pass, paid for and not lost`,
     },
     {
       label: 'Pass fees for this period',
@@ -152,125 +231,161 @@ export function RevenueHeadline({
     },
   ];
 
+  // The bar and the legend are two views of one breakdown, so pointing at
+  // either one picks out the lane in both. Hover is instant: it is feedback on
+  // where the pointer already is, not a transition to wait for.
+  const [focused, setFocused] = useState<string | null>(null);
+  const visibleParts = parts.filter((part) => part.value > 0);
+
   return (
-    <section className="flex flex-col gap-5 rounded-xl border border-border bg-card p-4 shadow-sm sm:p-5">
-      <div className="flex flex-col gap-1.5">
-        <span className="text-[11px] font-semibold uppercase tracking-[0.09em] text-muted-foreground">
-          Collected at the gate {scopeLabel}
-        </span>
-        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-          <span className="text-[34px] font-bold leading-none tracking-tight tabular-nums text-foreground sm:text-[40px]">
-            {money(current.collected)}
+    <section className="flex flex-col rounded-xl border border-border bg-card">
+      <div className="flex flex-col gap-6 p-5 sm:flex-row sm:items-center sm:justify-between sm:gap-10 sm:p-6">
+        <div className="flex min-w-0 flex-col">
+          <span className="text-[13px] font-semibold text-muted-foreground">
+            Collected at the gate {scopeLabel}
           </span>
-          <span className="flex items-baseline gap-1.5 text-xs text-muted-foreground">
+          <Amount
+            value={current.collected}
+            currency={currency}
+            className="mt-1.5 text-[44px] font-semibold leading-[1.05] tracking-[-0.035em] text-foreground sm:text-[56px]"
+          />
+          <p className="mt-2 flex flex-wrap items-baseline gap-x-1.5 text-[13px] text-muted-foreground">
             <Delta value={pctChange(current.collected, previous.collected)} />
-            vs {comparisonLabel}
-          </span>
+            <span>from {comparisonLabel}</span>
+          </p>
+          <p className="mt-4 max-w-[52ch] text-[13px] leading-relaxed text-muted-foreground">
+            {current.chargeableValue > 0 ? (
+              <>
+                <span className="font-medium text-foreground">{money(current.chargeableValue)}</span> was
+                chargeable at the gate.
+              </>
+            ) : (
+              <>Nothing was chargeable at the gate {scopeLabel}.</>
+            )}
+            {current.passValue > 0 && (
+              <>
+                {' '}
+                Pass holders used another {money(current.passValue)}, billed on their subscription.
+              </>
+            )}
+          </p>
         </div>
-        <p className="text-[13px] leading-snug text-muted-foreground">
-          {current.chargeableValue > 0 ? (
-            <>
-              <span className="font-semibold text-foreground">
-                {formatPct(current.chargeableCaptureRate)}
-              </span>{' '}
-              of the {money(current.chargeableValue)} that was chargeable at the gate.
-            </>
-          ) : (
-            <>Nothing was chargeable at the gate {scopeLabel}.</>
-          )}
-          {current.passValue > 0 && (
-            <>
-              {' '}
-              Pass holders used another {money(current.passValue)} of parking, billed on their
-              subscription instead.
-            </>
-          )}
-        </p>
+
+        {current.chargeableValue > 0 && <CaptureRing pct={current.chargeableCaptureRate} />}
       </div>
 
       {total > 0 && (
-        <div className="flex flex-col gap-3">
-          <div className="flex h-2.5 w-full gap-px overflow-hidden rounded-full bg-muted">
-            {parts
-              .filter((part) => part.value > 0)
-              .map((part) => (
-                <span
-                  key={part.key}
-                  className="h-full first:rounded-l-full last:rounded-r-full"
-                  style={{
-                    width: `${share(part.value)}%`,
-                    minWidth: 4,
-                    background: part.color,
-                  }}
-                />
-              ))}
+        <div className="flex flex-col gap-4 px-5 pb-5 sm:px-6 sm:pb-6">
+          {/* Separate rounded segments with a hairline gap, as Apple Card draws
+              spending by category: each lane reads as its own piece of the
+              whole, and a thin lane still has a visible end cap. */}
+          <div
+            className="bar-reveal flex h-2.5 w-full gap-[3px]"
+            role="img"
+            aria-label={visibleParts
+              .map((part) => `${part.label} ${formatPct(share(part.value))}`)
+              .join(', ')}
+            onPointerLeave={() => setFocused(null)}
+          >
+            {visibleParts.map((part) => (
+              <span
+                key={part.key}
+                onPointerEnter={() => setFocused(part.key)}
+                className="h-full rounded-full transition-opacity duration-150 ease-out"
+                style={{
+                  flexGrow: part.value,
+                  flexBasis: 0,
+                  minWidth: 6,
+                  background: part.color,
+                  opacity: focused && focused !== part.key ? 0.25 : 1,
+                }}
+              />
+            ))}
           </div>
 
-          <dl className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            {parts.map((part) => (
-              <div key={part.key} className="flex flex-col gap-1">
-                <dt className="flex items-center gap-1.5 text-[12.5px] text-muted-foreground">
+          <dl
+            className="grid grid-cols-1 gap-x-8 sm:grid-cols-2"
+            onPointerLeave={() => setFocused(null)}
+          >
+            {parts.map((part) => {
+              const dimmed = focused !== null && focused !== part.key;
+              return (
+                <div
+                  key={part.key}
+                  onPointerEnter={() => setFocused(part.key)}
+                  className={cn(
+                    'flex items-center gap-3 border-b border-border/60 py-3 transition-opacity duration-150 ease-out',
+                    dimmed && 'opacity-45'
+                  )}
+                >
                   <span
-                    className="h-2 w-2 shrink-0 rounded-[2px]"
+                    className="h-2.5 w-2.5 shrink-0 rounded-full"
                     style={{ background: part.color }}
                   />
-                  {part.label}
-                </dt>
-                <dd className="flex flex-wrap items-baseline gap-x-2">
-                  <span className="text-[17px] font-semibold leading-none tabular-nums text-foreground">
-                    {money(part.value)}
-                  </span>
-                  <span className="text-[11.5px] tabular-nums text-muted-foreground">
-                    {formatPct(share(part.value))}
-                  </span>
-                  {part.delta !== undefined && <Delta value={part.delta} goodWhenDown />}
-                </dd>
-                {part.note && (
-                  <span className="text-[11.5px] text-muted-foreground">{part.note}</span>
-                )}
-              </div>
-            ))}
+                  <dt className="flex min-w-0 flex-1 flex-col">
+                    <span className="truncate text-[13.5px] font-medium text-foreground">{part.label}</span>
+                    {part.note && (
+                      <span className="truncate text-[11.5px] text-muted-foreground">{part.note}</span>
+                    )}
+                  </dt>
+                  <dd className="flex shrink-0 flex-col items-end">
+                    <span className="text-[15px] font-semibold tracking-[-0.01em] tabular-nums text-foreground">
+                      {money(part.value)}
+                    </span>
+                    <span className="flex items-center gap-1.5 text-[11.5px] tabular-nums text-muted-foreground">
+                      {part.delta !== undefined && <Delta value={part.delta} goodWhenDown />}
+                      {formatPct(share(part.value))}
+                    </span>
+                  </dd>
+                </div>
+              );
+            })}
           </dl>
         </div>
       )}
 
-      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-border pt-3 text-[12.5px] text-muted-foreground">
-        <span>
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-border px-5 py-3 text-[12.5px] text-muted-foreground sm:px-6">
+        <span className="tabular-nums">
           {current.exited} of {current.sessions} visits completed
-          {current.stillParked > 0 && ` · ${current.stillParked} still parked`}
+          {current.stillParked > 0 && `, ${current.stillParked} still parked`}
         </span>
         <button
           type="button"
           onClick={() => setDetailOpen((open) => !open)}
           aria-expanded={detailOpen}
-          className="inline-flex items-center gap-1 rounded-md text-[12.5px] font-medium text-foreground/80 outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+          className="-mx-2 inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12.5px] font-medium text-primary outline-none transition-[transform,background-color] duration-100 ease-out hover:bg-primary/8 focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.97]"
         >
-          Accounting detail
-          <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', detailOpen && 'rotate-180')} />
+          {detailOpen ? 'Hide details' : 'Show details'}
+          <ChevronDown
+            className={cn(
+              'h-3.5 w-3.5 transition-transform duration-200 ease-[cubic-bezier(0.77,0,0.175,1)]',
+              detailOpen && 'rotate-180'
+            )}
+          />
         </button>
       </div>
 
       {detailOpen && (
-        <div className="flex flex-col gap-3">
-          <dl className="overflow-hidden rounded-lg border border-border">
+        <div className="scope-fade flex flex-col gap-3 border-t border-border px-5 py-4 sm:px-6">
+          <dl className="grid grid-cols-1 gap-x-8 md:grid-cols-2">
             {detailRows.map((row) => (
               <div
                 key={row.label}
-                className="flex items-baseline justify-between gap-4 border-b border-border px-3 py-2.5 last:border-0"
+                className="flex items-baseline justify-between gap-4 border-b border-border/60 py-2.5"
               >
-                <dt className="text-[12.5px] text-muted-foreground">
+                <dt className="min-w-0 text-[12.5px] text-foreground/80">
                   {row.label}
                   {row.hint && (
-                    <span className="block text-[11.5px] text-muted-foreground/70">{row.hint}</span>
+                    <span className="block text-[11.5px] text-muted-foreground">{row.hint}</span>
                   )}
                 </dt>
-                <dd className="shrink-0 font-mono text-[13px] font-semibold tabular-nums text-foreground">
+                <dd className="shrink-0 text-[13px] font-semibold tabular-nums text-foreground">
                   {row.value}
                 </dd>
               </div>
             ))}
           </dl>
-          <p className="text-[11.5px] leading-snug text-muted-foreground">
+          <p className="max-w-[80ch] text-[11.5px] leading-snug text-muted-foreground">
             Gross less collected reconciles exactly to revenue foregone less the minimum-charge
             uplift. Money figures cover exited sessions only.
           </p>

@@ -4,8 +4,8 @@ import dayjs from 'dayjs';
 import { Clock10Icon, Download, Plus, RefreshCcw, Search, TriangleAlert, X } from 'lucide-react';
 import { toast } from 'react-toastify';
 import {
+  useGetLapsedPassUsageQuery,
   useGetParkingPassesQuery,
-  useGetSessionsQuery,
   useGetStaffQuery,
   useUpdateParkingPassMutation,
 } from '@/app/(public)/(pages)/home/_redux/api';
@@ -56,13 +56,6 @@ interface StaffMember {
   name: string;
   license_plate: string;
   vehicle_type: string | null;
-}
-
-interface ParkingSessionRow {
-  registered_staff_member: string | null;
-  entry_time: string;
-  status: string;
-  calculated_charge: string | null;
 }
 
 const PAGE_SIZE = 8;
@@ -213,8 +206,8 @@ const SubscriptionsPage = () => {
   const { data: staffData } = useGetStaffQuery(undefined);
   const staff: StaffMember[] = staffData ?? [];
 
-  const { data: sessionsData } = useGetSessionsQuery(undefined);
-  const sessions: ParkingSessionRow[] = sessionsData ?? [];
+  // Sessions on lapsed passes, counted server-side.
+  const { data: lapsedUsage } = useGetLapsedPassUsageQuery();
 
   const [updatePass] = useUpdateParkingPassMutation();
 
@@ -310,21 +303,16 @@ const SubscriptionsPage = () => {
   }, [rows, staff]);
 
   const needsAttention = useMemo(() => {
+    const usage = new Map((lapsedUsage ?? []).map((u) => [u.pass_id, u]));
     return rows
       .filter((r) => r.status === 'LAPSED')
       .map(({ pass }) => {
-        const keys = new Set(vehiclesOf(pass).map((v) => `${v.name} - ${v.license_plate}`));
-        const sessionsSince = sessions.filter(
-          (s) => s.registered_staff_member !== null && keys.has(s.registered_staff_member) && dayjs(s.entry_time).isAfter(dayjs(pass.valid_until))
-        );
-        const unbilled = sessionsSince
-          .filter((s) => s.status === 'COMPLETED')
-          .reduce((sum, s) => sum + Number(s.calculated_charge || 0), 0);
-        return { pass, sessionsCount: sessionsSince.length, unbilled };
+        const u = usage.get(pass.id);
+        return { pass, sessionsCount: u?.sessions_count ?? 0, unbilled: u?.unbilled ?? 0 };
       })
       .filter((x) => x.sessionsCount > 0)
       .slice(0, 3);
-  }, [rows, sessions]);
+  }, [rows, lapsedUsage]);
 
   const renewalCalendar = useMemo(
     () =>

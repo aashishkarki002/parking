@@ -1,15 +1,16 @@
 import { useMemo, useState } from 'react';
-import { ArrowLeft, Motorbike, Car, ChevronLeft, ChevronRight, Eye, Search } from 'lucide-react';
+import { ArrowLeft, Pencil, Motorbike, Car, ChevronLeft, ChevronRight, Eye, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { formatDate } from '@/functions/dateFn';
-import { GatePill, KpiTile, StatusPill } from '@/components/tenants/primitives';
+import { GatePill, KpiTile, QuotaValue, StatusPill } from '@/components/tenants/primitives';
 import {
   EXPIRING_WINDOW_DAYS,
   getInitials,
   type TenantMember,
   type TenantRow,
+  type Vendor,
 } from '@/components/tenants/types';
 
 const PAGE_SIZE = 8;
@@ -18,10 +19,11 @@ interface TenantMembersProps {
   row: TenantRow;
   onBack: () => void;
   onOpenMember: (member: TenantMember) => void;
+  onEdit: (vendor: Vendor) => void;
 }
 
 // Level 2 of the tenant flow: the cardholders belonging to one tenant.
-export function TenantMembers({ row, onBack, onOpenMember }: TenantMembersProps) {
+export function TenantMembers({ row, onBack, onOpenMember, onEdit }: TenantMembersProps) {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
   const [page, setPage] = useState(0);
@@ -82,12 +84,17 @@ export function TenantMembers({ row, onBack, onOpenMember }: TenantMembersProps)
           <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
             <GatePill allowed={vendor.gate_access_allowed} />
             <span>{vendor.stamp_free_minutes} min per stamp</span>
+            {vendor.tenant_free_hours != null && <span>{vendor.tenant_free_hours} h free parking</span>}
             {vendor.last_synced_at && (
               <span>
                 Synced {formatDate(vendor.last_synced_at)}
                 {vendor.sync_source ? ` (${vendor.sync_source})` : ''}
               </span>
             )}
+            <Button variant="outline" size="sm" onClick={() => onEdit(vendor)}>
+              <Pencil className="h-3.5 w-3.5" />
+              Edit tenant
+            </Button>
           </div>
         )}
       </div>
@@ -100,14 +107,14 @@ export function TenantMembers({ row, onBack, onOpenMember }: TenantMembersProps)
         />
         <KpiTile
           label="Cars"
-          value={row.carQuota > 0 ? `${row.carsUsed}/${row.carQuota}` : row.carsUsed}
+          value={<QuotaValue used={row.carsUsed} quota={row.carQuota} />}
           caption={
             row.carQuota > 0 ? `${Math.max(0, row.carQuota - row.carsUsed)} free` : 'No quota synced'
           }
         />
         <KpiTile
           label="Bikes"
-          value={row.bikeQuota > 0 ? `${row.bikesUsed}/${row.bikeQuota}` : row.bikesUsed}
+          value={<QuotaValue used={row.bikesUsed} quota={row.bikeQuota} />}
           caption={
             row.bikeQuota > 0 ? `${Math.max(0, row.bikeQuota - row.bikesUsed)} free` : 'No quota synced'
           }

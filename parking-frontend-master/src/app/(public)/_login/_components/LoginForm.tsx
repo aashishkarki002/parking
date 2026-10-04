@@ -12,8 +12,6 @@ import IconButton from '@mui/material/IconButton';
 import InputAdornment from '@mui/material/InputAdornment';
 import Paper from '@mui/material/Paper';
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
-import { TENANT_LOGIN } from '@/lib/public/roles';
 import { useLogin } from '@/app/(public)/_login/_hooks/useLogin';
 import type { ILoginProps } from '@/app/(public)/_login/_redux/types';
 
@@ -63,6 +61,7 @@ export default function LoginForm({ redirectUrl = '' }: ILoginProps) {
                     required
                     xs={12}
                     name="persona"
+                    autoComplete="username"
                     autoFocus
                     startAdornment={
                       <InputAdornment position="start">
@@ -84,6 +83,7 @@ export default function LoginForm({ redirectUrl = '' }: ILoginProps) {
                     required
                     type={showPassword ? 'text' : 'password'}
                     name="password"
+                    autoComplete="current-password"
                     startAdornment={
                       <InputAdornment position="start">
                         <IconButton

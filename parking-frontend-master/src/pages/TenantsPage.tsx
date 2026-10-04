@@ -13,6 +13,8 @@ import { VehicleFormSheet } from '@/components/VehicleFormSheet';
 import { TenantDirectory } from '@/components/tenants/TenantDirectory';
 import { TenantMembers } from '@/components/tenants/TenantMembers';
 import { MemberCardDialog } from '@/components/tenants/MemberCardDialog';
+import { TenantEditSheet } from '@/components/tenants/TenantEditSheet';
+import { KpiTileSkeleton } from '@/components/tenants/primitives';
 import {
   categoryFor,
   EXPIRING_WINDOW_DAYS,
@@ -84,6 +86,9 @@ const TenantsPage = () => {
   // Tracked by id so the card re-reads the member from fresh rows after a
   // refetch (e.g. when its card is deactivated from inside the dialog).
   const [viewMemberId, setViewMemberId] = useState<number | null>(null);
+  // By id, so the sheet keeps reading fresh vendor data across refetches.
+  const [editVendorId, setEditVendorId] = useState<number | null>(null);
+  const [editOpen, setEditOpen] = useState(false);
 
   const isLoading = vendorsLoading || staffLoading;
   const isError = vendorsError || staffError;
@@ -183,6 +188,13 @@ const TenantsPage = () => {
     setSheetOpen(true);
   };
 
+  const editingVendor = editVendorId !== null ? vendors.find((v) => v.id === editVendorId) ?? null : null;
+
+  const editTenant = (vendor: Vendor) => {
+    setEditVendorId(vendor.id);
+    setEditOpen(true);
+  };
+
   const viewMember = (member: TenantMember) => {
     setViewMemberId(member.id);
   };
@@ -220,9 +232,7 @@ const TenantsPage = () => {
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border lg:grid-cols-4">
             {Array.from({ length: 4 }).map((_, i) => (
-              <div key={i} className="bg-card p-4">
-                <Skeleton className="h-8 w-20" />
-              </div>
+              <KpiTileSkeleton key={i} />
             ))}
           </div>
           <div className="space-y-2">
@@ -244,9 +254,9 @@ const TenantsPage = () => {
           description="That tenant no longer exists. Go back to the directory to pick another one."
         />
       ) : selectedRow ? (
-        <TenantMembers row={selectedRow} onBack={clearTenant} onOpenMember={viewMember} />
+        <TenantMembers row={selectedRow} onBack={clearTenant} onOpenMember={viewMember} onEdit={editTenant} />
       ) : (
-        <TenantDirectory rows={rows} onSelect={selectTenant} />
+        <TenantDirectory rows={rows} onSelect={selectTenant} onEdit={editTenant} />
       )}
 
       {selectedRow && (
@@ -260,6 +270,8 @@ const TenantsPage = () => {
           onChanged={refetchStaff}
         />
       )}
+
+      <TenantEditSheet vendor={editingVendor} open={editOpen} onOpenChange={setEditOpen} />
 
       <VehicleFormSheet
         defaultCompanyId={selectedRow?.vendor?.id ?? null}

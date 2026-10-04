@@ -25,7 +25,7 @@ export function PageShell({ title, actions, children }: PageShellProps) {
         <div className="flex flex-col gap-3 border-b border-border px-4 py-3 sm:h-16 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-6">
           <div className="flex items-center gap-2">
             <SidebarTrigger className="h-8 w-8 shrink-0 rounded-lg border border-border text-foreground/70 hover:bg-muted hover:text-foreground" />
-            <h1 className="text-lg font-semibold text-foreground sm:text-xl">{title}</h1>
+            <h1 className="text-base font-semibold text-foreground">{title}</h1>
           </div>
 
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">

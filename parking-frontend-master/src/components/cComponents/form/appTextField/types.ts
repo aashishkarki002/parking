@@ -28,6 +28,7 @@ export interface ITextFieldProps {
   onBlur?: FocusEventHandler<HTMLInputElement | HTMLTextAreaElement> | undefined;
   className?: string;
   autoFocus?: boolean;
+  autoComplete?: string;
   inputRef?: Ref<HTMLInputElement>;
   focusElement?: any;
   hasError?: boolean;

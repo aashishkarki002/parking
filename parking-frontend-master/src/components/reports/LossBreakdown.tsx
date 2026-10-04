@@ -1,72 +1,119 @@
-import { MIX_PALETTE } from '@/components/dashboard/mix-types';
-import { formatMoney, formatPct, type CauseBreakdown } from '@/components/reports/metrics';
+import { useState } from 'react';
+import { TrendingDown } from 'lucide-react';
+import { InsightCard, ShowMore } from '@/components/reports/ReportPanel';
+import {
+  formatMoney,
+  formatPct,
+  type CauseBreakdown,
+  type LossCause,
+} from '@/components/reports/metrics';
 
-interface LossBreakdownProps {
+const TOP = 3;
+
+// The cause as the subject of a sentence, and where an admin would go to
+// change it. Coupons have no single screen that governs them, so no link.
+const CAUSE_COPY: Partial<Record<LossCause, { noun: string; action?: { to: string; label: string } }>> = {
+  GRACE: { noun: 'Free grace periods', action: { to: '/pricing-plans', label: 'Review grace periods' } },
+  WAIVED: { noun: 'Waivers at the gate', action: { to: '/sessions', label: 'Review sessions' } },
+  VALIDATION: { noun: 'Tenant stamps', action: { to: '/tenants', label: 'Review tenants' } },
+  COUPON: { noun: 'Coupons' },
+};
+
+interface LeakInsightProps {
   causes: CauseBreakdown[];
+  leakage: number;
   currency: string;
+  className?: string;
 }
 
 /**
- * Revenue given away, ranked by cause — the leakage causes only, since
- * pass-covered parking was paid for on a subscription and is reported apart
- * (see metrics.ts and PassEconomics).
+ * Revenue given away, answered as "what is costing the most". The top cause is
+ * the headline because it is the one lever worth pulling first; the next two
+ * are shown for scale, and the rest wait behind a disclosure.
  *
- * Each session is attributed whole to a single primary cause rather than split
- * across the free-minute sources it used — tiered brackets and plan minimums
- * make the sources non-linear, so a linear split would be a fabrication. The
- * subtitle says so, because a reader would otherwise assume the shares add up
- * the way a true decomposition would.
+ * Monthly-pass parking is excluded (it was paid for, see PassInsight), and each
+ * session counts once against its main cause, so the shares are not a linear
+ * split of the free minutes. The detail line says that in passing.
  */
-export function LossBreakdown({ causes, currency }: LossBreakdownProps) {
-  if (causes.length === 0) {
+export function LeakInsight({ causes, leakage, currency, className }: LeakInsightProps) {
+  const [open, setOpen] = useState(false);
+  const money = (amount: number) => formatMoney(amount, currency);
+
+  if (causes.length === 0 || leakage <= 0) {
     return (
-      <p className="rounded-lg border border-dashed border-border px-3 py-6 text-center text-[12.5px] text-muted-foreground">
-        Nothing was given away in this period — every session was either charged or covered by a
-        pass.
-      </p>
+      <InsightCard
+        className={className}
+        icon={TrendingDown}
+        category="Revenue lost"
+        tint="var(--chart-3)"
+        headline="Nothing was given away."
+        detail="Every session was either charged or covered by a monthly pass."
+      />
     );
   }
 
+  const [top] = causes;
+  const copy = CAUSE_COPY[top.cause];
+  const rows = open ? causes : causes.slice(0, TOP);
+  // Bars scale to the top cause, so the picture answers "how much smaller is
+  // everything else" rather than restating shares the text already gives.
+  const largest = top.foregone || 1;
+
   return (
-    <div className="flex flex-col gap-3">
-      {causes.map((cause, index) => (
-        <div key={cause.cause} className="flex flex-col gap-1.5">
-          <div className="flex items-baseline justify-between gap-3">
-            <span className="flex items-center gap-2 text-[13px] font-medium text-foreground">
+    <InsightCard
+      className={className}
+      icon={TrendingDown}
+      category="Revenue lost"
+      tint="var(--chart-5)"
+      headline={
+        causes.length === 1 ? (
+          <>{copy?.noun ?? top.label} account for all {money(leakage)} given away.</>
+        ) : (
+          <>{copy?.noun ?? top.label} cost the most.</>
+        )
+      }
+      detail={
+        <>
+          {money(top.foregone)} across {top.sessions} {top.sessions === 1 ? 'session' : 'sessions'},{' '}
+          {formatPct(top.pct)} of the {money(leakage)} given away. Pass parking is not counted here.
+        </>
+      }
+      action={copy?.action}
+    >
+      <ul className="flex flex-col gap-3">
+        {rows.map((cause, index) => (
+          <li key={cause.cause} className="flex flex-col gap-1.5">
+            <div className="flex items-baseline justify-between gap-3 text-[13px]">
+              <span className={index === 0 ? 'font-medium text-foreground' : 'text-foreground/80'}>
+                {cause.label}
+              </span>
+              <span className="shrink-0 font-semibold tabular-nums text-foreground">
+                {money(cause.foregone)}
+              </span>
+            </div>
+            <span className="block h-1.5">
               <span
-                className="h-2 w-2 shrink-0 rounded-[2px]"
-                style={{ background: MIX_PALETTE[index % MIX_PALETTE.length] }}
+                className="bar-reveal block h-full rounded-full"
+                style={{
+                  width: `${Math.max((cause.foregone / largest) * 100, 2)}%`,
+                  // Only the headline cause carries the card's colour; the rest
+                  // are context, so they stay neutral.
+                  background: index === 0 ? 'var(--chart-5)' : 'color-mix(in oklab, var(--foreground) 18%, transparent)',
+                  ['--bar-delay' as string]: `${index * 40}ms`,
+                }}
               />
-              {cause.label}
-              <span className="text-[11.5px] font-normal text-muted-foreground">
-                {cause.sessions} {cause.sessions === 1 ? 'session' : 'sessions'}
+            </span>
+            {cause.recovered > 0 && (
+              <span className="text-[11.5px] text-muted-foreground">
+                {money(cause.recovered)} of it billed back to tenants
               </span>
-            </span>
-            <span className="shrink-0 font-mono text-[13px] font-semibold tabular-nums text-foreground">
-              {formatMoney(cause.foregone, currency)}
-              <span className="ml-1.5 font-sans text-[11.5px] font-normal text-muted-foreground">
-                {formatPct(cause.pct)}
-              </span>
-            </span>
-          </div>
-
-          <span className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-            <span
-              className="block h-full rounded-full"
-              style={{
-                width: `${Math.max(cause.pct, 1)}%`,
-                background: MIX_PALETTE[index % MIX_PALETTE.length],
-              }}
-            />
-          </span>
-
-          {cause.recovered > 0 && (
-            <span className="text-[11.5px] text-emerald-600 dark:text-emerald-400">
-              {formatMoney(cause.recovered, currency)} recovered by billing tenants for overage
-            </span>
-          )}
-        </div>
-      ))}
-    </div>
+            )}
+          </li>
+        ))}
+      </ul>
+      {causes.length > TOP && (
+        <ShowMore open={open} onToggle={() => setOpen((o) => !o)} count={causes.length} noun="causes" />
+      )}
+    </InsightCard>
   );
 }

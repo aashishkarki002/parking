@@ -4,7 +4,11 @@ import dayjs from 'dayjs';
 import { Download } from 'lucide-react';
 import { toast } from 'react-toastify';
 import { DocumentTextIcon } from '@heroicons/react/24/outline';
-import { useGetSessionsQuery, useGetVendorsQuery } from '@/app/(public)/(pages)/home/_redux/api';
+import {
+  useGetStatementMonthsQuery,
+  useGetStatementVisitsQuery,
+  useGetVendorsQuery,
+} from '@/app/(public)/(pages)/home/_redux/api';
 import { PageShell } from '@/components/PageShell';
 import { EmptyState } from '@/components/EmptyState';
 import { Button } from '@/components/ui/button';
@@ -19,7 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { buildStatement, monthsWithVisits } from '@/components/statements/derive';
+import { buildStatement } from '@/components/statements/derive';
 import { KpiTile } from '@/components/statements/primitives';
 import { csvEscape, downloadCsv } from '@/components/statements/csv';
 import { TenantStatementDetail } from '@/components/statements/TenantStatementDetail';
@@ -68,19 +72,14 @@ const toSummaryCsv = (rows: TenantStatementRow[]) => {
   return [headers.join(','), ...lines].join('\n');
 };
 
-// Guest parking, billed back to the tenant who validated the visit. Everything
-// on this page is derived on the client from /parking/sessions — see
-// components/statements/types.ts for why, and for what these figures do and
-// do not mean.
+// Guest parking, billed back to the tenant who validated the visit. The server
+// sends only the period's stamped guest visits (management.report_views); the
+// statement is still built here — see components/statements/types.ts for what
+// these figures do and do not mean.
 const StatementsPage = () => {
-  const {
-    data: sessionsData,
-    isLoading: sessionsLoading,
-    isError: sessionsError,
-  } = useGetSessionsQuery(undefined);
+  const { data: monthsData, isLoading: monthsLoading, isError: monthsError } = useGetStatementMonthsQuery();
   const { data: vendorsData, isLoading: vendorsLoading } = useGetVendorsQuery(undefined);
 
-  const sessions: SessionRow[] = sessionsData ?? NONE;
   const vendors: VendorRow[] = vendorsData ?? NONE;
 
   // Both the period and the drilled-into tenant live in the URL, so a link to
@@ -92,7 +91,14 @@ const StatementsPage = () => {
   const selectedKey = searchParams.get('tenant');
 
   const now = dayjs();
-  const months = useMemo(() => monthsWithVisits(sessions), [sessions]);
+  const months = useMemo(
+    () =>
+      (monthsData ?? NONE).map((ym) => {
+        const d = dayjs(`${ym}-01`);
+        return { key: monthKey(d), label: d.format('MMMM YYYY') };
+      }),
+    [monthsData]
+  );
 
   // Default to the current month, since that is the bill being accrued right
   // now — but if nobody has been stamped in yet this month, open on the most
@@ -105,6 +111,17 @@ const StatementsPage = () => {
 
   const effectiveKey = periodKey ?? defaultKey;
   const period = useMemo(() => resolvePeriod(effectiveKey, now), [effectiveKey, now]);
+  // Every period is day-aligned, so these strings only change with the period.
+  const start = period.start?.toISOString();
+  const end = period.end?.toISOString();
+  const visitArgs = useMemo(() => ({ ...(start && { start }), ...(end && { end }) }), [start, end]);
+  const {
+    currentData: visitsData,
+    isFetching: visitsFetching,
+    isError: visitsError,
+  } = useGetStatementVisitsQuery(visitArgs, { skip: monthsLoading });
+  const sessions: SessionRow[] = (visitsData as SessionRow[] | undefined) ?? NONE;
+  const sessionsError = monthsError || visitsError;
   const statement = useMemo(
     () => buildStatement(sessions, vendors, period, now),
     [sessions, vendors, period, now]
@@ -114,7 +131,7 @@ const StatementsPage = () => {
     ? statement.rows.find((r) => r.key === selectedKey) ?? null
     : null;
 
-  const isLoading = sessionsLoading || vendorsLoading;
+  const isLoading = monthsLoading || vendorsLoading || (visitsFetching && !visitsData);
 
   // Changing the period drops the drill-down: a tenant with no visits in the
   // newly selected period would otherwise render as "not found".

@@ -1,5 +1,7 @@
 import { baseApiSlice } from '@/lib/public/baseApiSlice';
 import type { NightPricingConfig, PricingPlan } from '@/components/settings/types';
+import type { ReportMetrics } from '@/components/reports/metrics';
+import type { PassFeeSummary } from '@/components/reports/passes';
 
 // Match Django URLs used by Next app:
 //   POST /api/v1/parking/sessions/                      (scan/create)
@@ -16,6 +18,7 @@ import type { NightPricingConfig, PricingPlan } from '@/components/settings/type
 //   POST /api/v1/parking/rfid-force-entry                (operator fix: that "exit" was really an arrival)
 //   GET  /api/v1/parking/rfid-today                      (today's tenant sessions, parked first)
 //   GET  /api/v1/parking/rfid-lookup?uid=<uid>           (whose card is this — read-only, no gate action)
+//   GET  /api/v1/parking/rfid-taps?date=<YYYY-MM-DD>     (every RFID tap that day + entry/exit/rejected totals)
 //   GET  /api/v1/parking/rates                           (rate card: each vehicle type's plan + night window)
 //   GET  /api/v1/parking/staff/?search=<name|plate>      (manual lookup for offline OTP entry)
 //   POST /api/v1/parking/staff/                          (register vehicle)
@@ -38,6 +41,55 @@ export interface ParkingRates extends NightPricingConfig {
   }[];
 }
 
+// GET /parking/rfid-taps — see management.rfid.tap_log.
+export type RfidTapAction = 'ENTRY' | 'EXIT' | 'REJECTED' | 'FORCED_ENTRY';
+
+export interface RfidTap {
+  id: number;
+  scanned_at: string;
+  action: RfidTapAction;
+  uid: string;
+  reject_reason: string;
+  card_known: boolean;
+  card_active: boolean | null;
+  tenant: {
+    id: number;
+    name: string;
+    company: string | null;
+    company_id: number | null;
+    license_plate: string;
+  } | null;
+}
+
+export interface RfidTapLog {
+  date: string;
+  summary: {
+    total: number;
+    /** Includes staff-forced entries. */
+    entries: number;
+    exits: number;
+    rejected: number;
+    forced: number;
+    /** Rejections of a card that isn't issued or is blocked. */
+    unknown: number;
+    /** Distinct cards tapped. */
+    cards: number;
+  };
+  hours: { hour: number; entries: number; exits: number; rejected: number }[];
+  count: number;
+  results: RfidTap[];
+}
+
+export interface RfidTapLogArgs {
+  date: string;
+  /** ENTRY includes forced entries. */
+  action?: 'ENTRY' | 'EXIT' | 'REJECTED';
+  q?: string;
+  uid?: string;
+  offset?: number;
+  limit?: number;
+}
+
 export const scanApi = 'parking/sessions';
 export const staffApi = 'parking/staff';
 export const vendorsApi = 'parking/vendors';
@@ -46,6 +98,112 @@ export const parkingPassesApi = 'parking/parking-passes';
 export const rfidApi = 'parking/rfid';
 export const globalSearchApi = 'parking/search';
 export const ratesApi = 'parking/rates';
+export const dashboardApi = 'parking/dashboard';
+
+// GET /parking/dashboard/summary — see management.dashboard_views.
+export interface DashboardTotals {
+  count: number;
+  revenue: number;
+  digital: number;
+}
+
+export type DashboardCounts = [label: string, count: number][];
+
+export interface DashboardSummary {
+  current: DashboardTotals;
+  previous: DashboardTotals;
+  /** One entry per bucket between consecutive `edges`. */
+  buckets: { cash: number; digital: number }[];
+  mix: { vehicle: DashboardCounts; payment: DashboardCounts; status: DashboardCounts };
+}
+
+export interface DashboardSummaryArgs {
+  start: string;
+  end: string;
+  prev_start: string;
+  prev_end: string;
+  /** Comma-separated ISO instants. */
+  edges: string;
+}
+
+export interface DashboardSessionRow {
+  id: string;
+  ticket_number: string;
+  license_plate: string;
+  status: string;
+  entry_time: string;
+  calculated_charge: string | null;
+}
+
+export interface DashboardSessionsArgs {
+  start: string;
+  end: string;
+  status: string;
+  page: number;
+  page_size: number;
+}
+
+// GET /parking/reports/summary — see management.report_views.report_summary.
+export interface ReportTraffic {
+  arrivals: number[];
+  sessions: number;
+  avgDurationMinutes: number;
+  uniqueVehicles: number;
+  registeredVehicles: number;
+  repeatVisits: number;
+}
+
+export interface ReportSummary {
+  current: ReportMetrics;
+  previous: ReportMetrics;
+  passFees: PassFeeSummary;
+  traffic: { all: ReportTraffic; two: ReportTraffic; four: ReportTraffic };
+}
+
+// GET /parking/sessions-table — one filtered page, newest first.
+export interface SessionsTableArgs {
+  status?: string;
+  vehicle_type?: string;
+  payment?: string;
+  entry_after?: string;
+  entry_before?: string;
+  search?: string;
+  /** Exact plate, ignoring spaces, dashes and case. */
+  plate?: string;
+  page?: number;
+  page_size?: number;
+  /** Lifts the page-size cap for the CSV download. */
+  export?: 1;
+}
+
+// GET /parking/sessions-table/overview — the sessions page's KPI strip.
+export interface SessionsOverview {
+  stats: {
+    activeCount: number;
+    longestMins: number;
+    longestVehicle: string;
+    overstayCount: number;
+    closedTodayCount: number;
+    avgStay: number;
+    hasTimedExits: boolean;
+    autoClosedToday: number;
+    cashToday: number;
+    onlineToday: number;
+    collectedToday: number;
+    unsettledCount: number;
+    unsettledTotal: number;
+  };
+  tabCounts: Partial<Record<string, number>>;
+  parkedMix: DashboardCounts;
+  vehicleTypes: string[];
+  todaySpans: { entry_time: string; exit_time: string | null }[];
+}
+
+export interface LapsedPassUsage {
+  pass_id: number;
+  sessions_count: number;
+  unbilled: number;
+}
 
 export type GlobalSearchType =
   | 'session'
@@ -143,6 +301,8 @@ export const scanApiSlice = baseApiSlice.injectEndpoints({
           method: 'GET',
         };
       },
+      // Refetched after close / mark-paid so the session page never shows a stale status.
+      providesTags: ['Sessions'],
     }),
     applyStamp: builder.mutation({
       query: ({ ticketNo, vendor_id }) => {
@@ -217,6 +377,10 @@ export const scanApiSlice = baseApiSlice.injectEndpoints({
       },
       keepUnusedDataFor: 0,
     }),
+    getRfidTaps: builder.query<RfidTapLog, RfidTapLogArgs>({
+      query: (params) => ({ url: `${rfidApi}-taps`, method: 'GET', params }),
+      providesTags: ['Sessions'],
+    }),
     globalSearch: builder.query<GlobalSearchResponse, string>({
       query: (q) => {
         return {
@@ -244,6 +408,46 @@ export const scanApiSlice = baseApiSlice.injectEndpoints({
         };
       },
       providesTags: ['Sessions'],
+    }),
+    getDashboardSummary: builder.query<DashboardSummary, DashboardSummaryArgs>({
+      query: (params) => ({ url: `${dashboardApi}/summary`, method: 'GET', params }),
+      providesTags: ['Sessions'],
+    }),
+    getDashboardSessions: builder.query<
+      { count: number; results: DashboardSessionRow[] },
+      DashboardSessionsArgs
+    >({
+      query: (params) => ({ url: `${dashboardApi}/sessions`, method: 'GET', params }),
+      providesTags: ['Sessions'],
+    }),
+    getSessionCounts: builder.query<{ active: number; unpaid_exits: number }, void>({
+      query: () => ({ url: `${dashboardApi}/session-counts`, method: 'GET' }),
+      providesTags: ['Sessions'],
+    }),
+    getReportSummary: builder.query<ReportSummary, DashboardSummaryArgs>({
+      query: (params) => ({ url: 'parking/reports/summary', method: 'GET', params }),
+      providesTags: ['Sessions', 'ParkingPasses'],
+    }),
+    // Generic over the row type: each page reads its own subset of columns.
+    getSessionsTable: builder.query<{ count: number; results: unknown[] }, SessionsTableArgs>({
+      query: (params) => ({ url: 'parking/sessions-table', method: 'GET', params }),
+      providesTags: ['Sessions'],
+    }),
+    getSessionsOverview: builder.query<SessionsOverview, { day_start: string }>({
+      query: (params) => ({ url: 'parking/sessions-table/overview', method: 'GET', params }),
+      providesTags: ['Sessions'],
+    }),
+    getStatementVisits: builder.query<unknown[], { start?: string; end?: string }>({
+      query: (params) => ({ url: 'parking/statements/visits', method: 'GET', params }),
+      providesTags: ['Sessions'],
+    }),
+    getStatementMonths: builder.query<string[], void>({
+      query: () => ({ url: 'parking/statements/months', method: 'GET' }),
+      providesTags: ['Sessions'],
+    }),
+    getLapsedPassUsage: builder.query<LapsedPassUsage[], void>({
+      query: () => ({ url: 'parking/pass-lapsed-usage', method: 'GET' }),
+      providesTags: ['Sessions', 'ParkingPasses'],
     }),
     getStaff: builder.query({
       query: () => {
@@ -288,6 +492,19 @@ export const scanApiSlice = baseApiSlice.injectEndpoints({
           method: 'GET',
         };
       },
+      providesTags: ['Vendors'],
+    }),
+    // Only the locally-owned fields are writable; quota and gate access are
+    // read-only on the serializer (EasyManage is the source of truth).
+    updateVendor: builder.mutation({
+      query: ({ id, ...values }) => {
+        return {
+          url: `${vendorsApi}/${id}`,
+          method: 'PATCH',
+          data: values,
+        };
+      },
+      invalidatesTags: ['Vendors', 'Staff'],
     }),
     createParkingPass: builder.mutation({
       query: (values) => {
@@ -361,11 +578,23 @@ export const {
   useRfidForceEntryMutation,
   useGetRfidTodayQuery,
   useLazyRfidLookupQuery,
+  useGetRfidTapsQuery,
   useLazySearchStaffQuery,
   useGlobalSearchQuery,
   useLazyGetSessionByTicketQuery,
+  useGetSessionByTicketQuery,
   useApplyStampMutation,
   useGetSessionsQuery,
+  useGetDashboardSummaryQuery,
+  useGetDashboardSessionsQuery,
+  useGetSessionCountsQuery,
+  useGetReportSummaryQuery,
+  useGetSessionsTableQuery,
+  useLazyGetSessionsTableQuery,
+  useGetSessionsOverviewQuery,
+  useGetStatementVisitsQuery,
+  useGetStatementMonthsQuery,
+  useGetLapsedPassUsageQuery,
   useGetStaffQuery,
   useCreateStaffMutation,
   useGetVehicleTypesQuery,
@@ -375,6 +604,7 @@ export const {
   useGetParkingPassesQuery,
   useUpdateParkingPassMutation,
   useUpdateStaffMutation,
+  useUpdateVendorMutation,
   useCreateRfidCardMutation,
   useUpdateRfidCardMutation,
 } = scanApiSlice;
