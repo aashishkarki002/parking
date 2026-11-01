@@ -590,6 +590,156 @@ class TenantAllowanceBillingTests(TestCase):
         self.assertEqual(session.calculated_charge, Decimal('60.00'))
         self.assertIn('Free allowance (9h from', session.notes)
 
+    # --- Subscriber-only companies (Vendor.tenant_allowance_enabled off) ---
+    # e.g. "Fixed Monthly Parking": its members get the same 12h window as a
+    # tenant while their pass is active, and bill like visitors once it
+    # lapses (vehicle 3338, TI20261031-00024, was charged only night minutes
+    # weeks after its pass ended).
+
+    VISITOR_PLATE = 'BA-5-PA-5555'
+
+    def _subscriber_group(self):
+        self.vendor.tenant_allowance_enabled = False
+        self.vendor.save()
+
+    def _pass(self, valid_from_h, valid_until_h, **extra):
+        return ParkingPass.objects.create(
+            staff=self.staff,
+            valid_from=self.t0 + timedelta(hours=valid_from_h),
+            valid_until=self.t0 + timedelta(hours=valid_until_h), **extra)
+
+    def _assert_billed_like_visitor(self, session, start_h, hours):
+        visitor = self._bill(self._session(start_h, hours, plate=self.VISITOR_PLATE))
+        self.assertIsNone(visitor.registered_staff_member)
+        self.assertIsNone(session.applied_pass)
+        self.assertNotIn('Free allowance (', session.notes or '')
+        self.assertGreater(session.calculated_charge, Decimal('0.00'))
+        self.assertEqual(session.calculated_charge, visitor.calculated_charge)
+        self.assertEqual(session.status, visitor.status)
+
+    def test_subscriber_with_lapsed_pass_is_billed_like_a_visitor(self):
+        self._subscriber_group()
+        self._pass(-60 * 24, -20 * 24)
+        session = self._bill(self._session(0, 3))
+
+        self._assert_billed_like_visitor(session, 0, 3)
+
+    def test_subscriber_who_never_had_a_pass_is_billed_like_a_visitor(self):
+        self._subscriber_group()
+        session = self._bill(self._session(0, 3))
+
+        self._assert_billed_like_visitor(session, 0, 3)
+
+    def test_subscriber_with_deactivated_pass_is_billed_like_a_visitor(self):
+        # Pass 439 for 3338 was is_active=False as well as expired.
+        self._subscriber_group()
+        self._pass(-24, 30 * 24, is_active=False)
+        session = self._bill(self._session(0, 3))
+
+        self._assert_billed_like_visitor(session, 0, 3)
+
+    def test_subscriber_with_active_pass_free_within_12h(self):
+        self._subscriber_group()
+        self._give_pass()
+        session = self._bill(self._session(0, 10))
+
+        self.assertEqual(session.status, 'COVERED_BY_PASS')
+        self.assertEqual(session.calculated_charge, Decimal('0.00'))
+        self.assertIsNotNone(session.applied_pass)
+        self.assertIn('Free allowance (12h from', session.notes)
+
+    def test_subscriber_with_active_pass_charged_past_12h(self):
+        self._subscriber_group()
+        self._give_pass()
+        session = self._bill(self._session(0, 12.75))
+
+        self.assertEqual(session.status, 'COMPLETED')
+        self.assertIsNotNone(session.applied_pass)
+        self.assertEqual(session.calculated_charge, Decimal('45.00'))
+        self.assertIn('45m charged', session.notes)
+
+    def test_subscriber_re_entry_shares_the_12h_window(self):
+        self._subscriber_group()
+        self._give_pass()
+        self._bill(self._session(0, 6))
+        # Window opened at 0h ends at 12h: 7h-12h free, 12h-15h charged.
+        session = self._bill(self._session(7, 8))
+
+        self.assertEqual(session.calculated_charge, Decimal('180.00'))
+
+    def test_subscriber_uses_company_free_hours_override(self):
+        self._subscriber_group()
+        self.vendor.tenant_free_hours = 9
+        self.vendor.save()
+        self._give_pass()
+        session = self._bill(self._session(0, 10))
+
+        self.assertEqual(session.calculated_charge, Decimal('60.00'))
+        self.assertIn('Free allowance (9h from', session.notes)
+
+    def test_subscriber_pass_expiry_switches_to_visitor_billing(self):
+        self._subscriber_group()
+        self._pass(-24, 24)
+        covered = self._bill(self._session(0, 3))
+        after_expiry = self._bill(self._session(48, 3))
+
+        self.assertEqual(covered.status, 'COVERED_BY_PASS')
+        self._assert_billed_like_visitor(after_expiry, 48, 3)
+
+    def test_subscriber_pass_expiring_mid_stay_bills_as_visitor(self):
+        # The pass is checked at exit time, so leaving after it ended means
+        # no pass and no allowance for the whole stay.
+        self._subscriber_group()
+        self._pass(-24, 2)
+        session = self._bill(self._session(0, 3))
+
+        self._assert_billed_like_visitor(session, 0, 3)
+
+    def test_extra_vehicle_on_subscriber_pass_gets_the_window(self):
+        self._subscriber_group()
+        other = make_staff(company=self.vendor, vehicle_type=self.vehicle_type,
+                           license_plate='BA-9-PA-9999', name='Second Car')
+        self._give_pass().extra_vehicles.add(other)
+        session = self._bill(self._session(0, 10, plate='BA-9-PA-9999'))
+
+        self.assertEqual(session.status, 'COVERED_BY_PASS')
+        self.assertEqual(session.calculated_charge, Decimal('0.00'))
+
+    def test_global_allowance_off_leaves_subscriber_pass_fully_free(self):
+        self.config.tenant_allowance_enabled = False
+        self.config.save()
+        self._subscriber_group()
+        self._give_pass()
+        session = self._bill(self._session(0, 20))
+
+        self.assertEqual(session.status, 'COVERED_BY_PASS')
+        self.assertEqual(session.calculated_charge, Decimal('0.00'))
+
+    def test_global_allowance_off_lapsed_subscriber_billed_like_visitor(self):
+        self.config.tenant_allowance_enabled = False
+        self.config.save()
+        self._subscriber_group()
+        session = self._bill(self._session(0, 3))
+
+        self._assert_billed_like_visitor(session, 0, 3)
+
+    def test_real_tenant_without_pass_still_gets_allowance(self):
+        session = self._bill(self._session(0, 3))
+
+        self.assertEqual(session.status, 'WAIVED')
+        self.assertEqual(session.calculated_charge, Decimal('0.00'))
+        self.assertIn('Free allowance (', session.notes)
+
+    def test_flag_is_per_company(self):
+        self._subscriber_group()
+        tenant = make_vendor(name='Real Tenant Co')
+        make_staff(company=tenant, vehicle_type=self.vehicle_type,
+                   license_plate='BA-7-PA-7777', name='Tenant Car')
+        session = self._bill(self._session(0, 3, plate='BA-7-PA-7777'))
+
+        self.assertEqual(session.calculated_charge, Decimal('0.00'))
+        self.assertIn('Free allowance (', session.notes)
+
 
 class NightPricingTests(TestCase):
     """
@@ -632,6 +782,37 @@ class NightPricingTests(TestCase):
             ParkingPass.objects.create(
                 staff=staff, valid_from=self.at(1, 0), valid_until=self.at(28, 0))
         return staff
+
+    def _subscriber(self, pass_until):
+        """A member of a subscriber-only company (Fixed Monthly Parking)."""
+        vendor = make_vendor(name='Fixed Monthly Parking')
+        vendor.tenant_allowance_enabled = False
+        vendor.save()
+        staff = make_staff(company=vendor, vehicle_type=self.car, license_plate=self.PLATE)
+        ParkingPass.objects.create(staff=staff, valid_from=self.at(1, 0), valid_until=pass_until)
+        return staff
+
+    def test_lapsed_subscriber_early_morning_visit_pays_visitor_rate(self):
+        # TI20261031-00024 (3338): pass ended, in 05:25 out 09:16. It was
+        # charged 60 (night minutes only) because it got the 12h allowance.
+        self._subscriber(pass_until=self.at(2, 0))
+        session = self._bill(self.at(10, 5, 25), self.at(10, 9, 16), license_plate=self.PLATE)
+        visitor = self._bill(self.at(10, 5, 25), self.at(10, 9, 16), license_plate='BA-5-PA-5555')
+
+        self.assertIsNotNone(session.registered_staff_member)
+        self.assertNotIn('Free allowance (', session.notes or '')
+        self.assertEqual(session.calculated_charge, visitor.calculated_charge)
+        # 35m night (100/h) + 196m day (60/h) = 254.33 -> 255
+        self.assertEqual(session.calculated_charge, Decimal('255.00'))
+
+    def test_active_subscriber_early_morning_visit_pays_only_night(self):
+        self._subscriber(pass_until=self.at(28, 0))
+        session = self._bill(self.at(10, 5, 25), self.at(10, 9, 16), license_plate=self.PLATE)
+
+        self.assertIsNotNone(session.applied_pass)
+        self.assertIn('Free allowance (12h from', session.notes)
+        # 05:25-06:00 night at 100/h = 58.33 -> 60; day is inside the window.
+        self.assertEqual(session.calculated_charge, Decimal('60.00'))
 
     def test_visit_across_22h_splits_day_and_night(self):
         # 21:00-22:00 day (60) + 22:00-23:00 night (100)

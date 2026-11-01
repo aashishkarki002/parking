@@ -227,6 +227,17 @@ class Vendor(models.Model):
     )
 
     # --- Tenant free-parking allowance ---
+    # Off for companies that are only a grouping for monthly subscribers
+    # (e.g. "Fixed Monthly Parking"), not real tenants: their vehicles get
+    # the tenant free window only while their pass is active and are billed
+    # like visitors once it lapses.
+    tenant_allowance_enabled = models.BooleanField(
+        default=True,
+        help_text="Give this company's registered vehicles the daily tenant free allowance even "
+                  "without a pass. Turn off for subscriber-only groups (e.g. Fixed Monthly Parking): "
+                  "their vehicles get the allowance only while their pass is active and are billed "
+                  "as visitors once it lapses."
+    )
     # Overrides ParkingConfiguration.tenant_free_hours for this tenant's
     # registered vehicles (see ParkingSession._apply_tenant_allowance_billing).
     tenant_free_hours = models.PositiveSmallIntegerField(
@@ -1313,18 +1324,17 @@ class ParkingSession(models.Model):
 
         Returns True if this fully decided the charge/status, False if the
         caller should fall through to normal visitor-style billing — which
-        only happens when the allowance is off AND there's no active pass.
+        only happens when there's no active pass AND the allowance is off
+        (globally, or for this vehicle's company — see
+        Vendor.tenant_allowance_enabled).
         """
         # Mirrors the tenant-vehicle branch refresh_stamp_coverage already
         # has: never covers a tenant's own vehicle, but drops any stray
         # TenantBill left over from before it was linked to this Staff row.
         self.refresh_stamp_coverage()
 
-        active_pass = self.registered_staff_member.parking_passes.filter(
-            is_active=True,
-            valid_from__lte=self.exit_time,
-            valid_until__gte=self.exit_time
-        ).first()
+        # Primary holder or an extra vehicle on someone else's pass.
+        active_pass = ParkingPass.active_for_staff(self.registered_staff_member, at=self.exit_time)
         if active_pass:
             self.applied_pass = active_pass
 
@@ -1338,7 +1348,13 @@ class ParkingSession(models.Model):
         night_minutes -= night_grace
 
         config = ParkingConfiguration.get_solo()
-        if not config.tenant_allowance_enabled:
+        company = self.registered_staff_member.company
+        # A subscriber-only company (tenant_allowance_enabled off) gets the
+        # same 12h window as a tenant, but only while the pass is active —
+        # once it lapses its vehicles bill like visitors.
+        allowance_on = config.tenant_allowance_enabled and (
+            company is None or company.tenant_allowance_enabled or active_pass is not None)
+        if not allowance_on:
             if not active_pass:
                 return False
             self._bill(0, night_minutes)
@@ -1346,7 +1362,6 @@ class ParkingSession(models.Model):
                 self.status = 'COVERED_BY_PASS'
             return True
 
-        company = self.registered_staff_member.company
         free_hours = company.effective_tenant_free_hours if company else config.tenant_free_hours
         window = timedelta(hours=free_hours)
         window_start = self._free_window_start(window)
