@@ -21,7 +21,13 @@ from django.utils import timezone
 
 from .models import CardScanLog, ParkingPass, ParkingSession, RFIDCard
 
-TAP_COOLDOWN_SECONDS = 10
+# A second tap this soon after the member's last entry/exit is the same
+# visit, not a new event. Readers repeat a lingering card, and drivers re-tap
+# while the barrier is still lifting — at 10s those re-taps (seen 10-30s
+# apart) flipped a fresh ENTRY into an EXIT, so the real departure then
+# opened a session that sat open overnight and billed as an overstay.
+# Nobody genuinely parks and leaves, or leaves and returns, inside a minute.
+TAP_COOLDOWN_SECONDS = 60
 
 
 def _log(card, uid, action, reject_reason=''):
@@ -125,9 +131,8 @@ def tap(uid):
             staff = card.staff
             open_session = _lock_open_session(staff)
 
-            # Readers repeat a UID if the card lingers on the pad; treat any
-            # tap within the cooldown of this member's last entry/exit as
-            # the same tap.
+            # Any tap within the cooldown of this member's last entry/exit
+            # is a repeat of that tap (see TAP_COOLDOWN_SECONDS).
             last = open_session or ParkingSession.objects.filter(
                 registered_staff_member=staff).order_by('-entry_time').first()
             if last is not None:

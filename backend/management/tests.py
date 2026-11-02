@@ -1132,9 +1132,11 @@ class RFIDGateTests(TestCase):
             data['session_id'] = session_id
         return self.client.post('/api/v1/parking/rfid-force-entry', data, format='json')
 
-    def age(self, seconds=11):
-        """Pretend every recorded event happened `seconds` earlier."""
-        delta = timedelta(seconds=seconds)
+    def age(self, seconds=None):
+        """Pretend every recorded event happened `seconds` earlier
+        (default: just past the tap cooldown)."""
+        from management.rfid import TAP_COOLDOWN_SECONDS
+        delta = timedelta(seconds=TAP_COOLDOWN_SECONDS + 1 if seconds is None else seconds)
         ParkingSession.objects.update(entry_time=F('entry_time') - delta)
         ParkingSession.objects.filter(exit_time__isnull=False).update(exit_time=F('exit_time') - delta)
 
@@ -1179,6 +1181,16 @@ class RFIDGateTests(TestCase):
         self.assertEqual(self.tap().data['status'], 'exit')
         self.assertEqual(self.tap().data['status'], 'ignored_duplicate')
         self.assertEqual(ParkingSession.objects.filter(rfid_card=self.card).count(), 1)
+
+    def test_slow_retap_at_the_barrier_does_not_flip_entry_to_exit(self):
+        # Driver taps, barrier is slow, taps again ~30s later. That must stay
+        # one open session — not entry+exit, which inverted the toggle and
+        # left the real departure opening an overnight "overstay".
+        self.tap()
+        self.age(30)
+        self.assertEqual(self.tap().data['status'], 'ignored_duplicate')
+        session = ParkingSession.objects.get(rfid_card=self.card)
+        self.assertIsNone(session.exit_time)
 
     def test_unknown_card_is_rejected(self):
         resp = self.tap('9999999999')

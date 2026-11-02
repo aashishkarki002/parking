@@ -45,7 +45,7 @@ from .student_import import StudentFileError, normalize_rows, read_upload, templ
 
 # A card left on the scanner, or scanned twice by a nervous operator, must
 # not turn an entry straight into an exit. Same window as the RFID reader.
-CARD_COOLDOWN_SECONDS = 10
+CARD_COOLDOWN_SECONDS = 60  # re-scans inside a minute are the same visit; see rfid.TAP_COOLDOWN_SECONDS
 
 
 def _requests_with_students(queryset):
