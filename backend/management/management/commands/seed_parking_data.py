@@ -248,6 +248,10 @@ class Command(BaseCommand):
                     "company": company,
                     "vehicle_type": random.choice(vehicle_types),
                     "is_card_active": is_card_active,
+                    # One any-time vehicle (12h incl. night, no night rate)
+                    # so that billing path has sample data; the rest use the
+                    # normal tenant rules.
+                    "anytime_free_hours": 12 if i == 0 else None,
                     "is_sample": True,
                 },
             )

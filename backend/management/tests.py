@@ -792,6 +792,49 @@ class NightPricingTests(TestCase):
         ParkingPass.objects.create(staff=staff, valid_from=self.at(1, 0), valid_until=pass_until)
         return staff
 
+    def _anytime_subscriber(self, hours=12):
+        staff = self._subscriber(pass_until=self.at(28, 0))
+        staff.anytime_free_hours = hours
+        staff.save()
+        return staff
+
+    def test_anytime_allowance_parks_overnight_free_within_12h(self):
+        # Plate 8962: 20:00-07:00 crosses the whole night window but is
+        # inside 12h, so nothing is owed.
+        self._anytime_subscriber()
+        session = self._bill(self.at(10, 20), self.at(11, 7), license_plate=self.PLATE)
+        self.assertEqual(session.calculated_charge, Decimal('0.00'))
+        self.assertEqual(session.status, 'COVERED_BY_PASS')
+
+        # Without the override the same stay pays for its 8 night hours.
+        session.registered_staff_member.anytime_free_hours = None
+        session.registered_staff_member.save()
+        normal = self._bill(self.at(12, 20), self.at(13, 7), license_plate=self.PLATE)
+        self.assertEqual(normal.calculated_charge, Decimal('800.00'))
+
+    def test_anytime_allowance_bills_overage_at_day_rate_even_at_night(self):
+        # 14:00-04:00 = 14h: free until 02:00, 02:00-04:00 billed at the
+        # 60/h day rate (120), not the 100/h night rate.
+        self._anytime_subscriber()
+        session = self._bill(self.at(10, 14), self.at(11, 4), license_plate=self.PLATE)
+        self.assertEqual(session.calculated_charge, Decimal('120.00'))
+        self.assertEqual(session.status, 'COMPLETED')
+        self.assertIn('no night rate', session.notes)
+
+    def test_anytime_allowance_window_shared_across_re_entries(self):
+        self._anytime_subscriber()
+        self._bill(self.at(10, 8), self.at(10, 14), license_plate=self.PLATE)
+        # Window 08:00-20:00: back 15:00-22:00 -> 20:00-22:00 charged.
+        session = self._bill(self.at(10, 15), self.at(10, 22), license_plate=self.PLATE)
+        self.assertEqual(session.calculated_charge, Decimal('120.00'))
+
+    def test_anytime_allowance_lapsed_pass_still_bills_as_visitor(self):
+        staff = self._anytime_subscriber()
+        ParkingPass.objects.filter(staff=staff).update(valid_until=self.at(2, 0))
+        session = self._bill(self.at(10, 20), self.at(11, 7), license_plate=self.PLATE)
+        visitor = self._bill(self.at(10, 20), self.at(11, 7), license_plate='BA-5-PA-5555')
+        self.assertEqual(session.calculated_charge, visitor.calculated_charge)
+
     def test_lapsed_subscriber_early_morning_visit_pays_visitor_rate(self):
         # TI20261031-00024 (3338): pass ended, in 05:25 out 09:16. It was
         # charged 60 (night minutes only) because it got the 12h allowance.

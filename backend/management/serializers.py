@@ -129,7 +129,7 @@ class StaffSerializer(serializers.ModelSerializer):
         model = Staff
         fields = [
             'id', 'name', 'company', 'company_id', 'license_plate', 'vehicle_type', 'vehicle_type_id',
-            'card_code', 'is_card_active',
+            'card_code', 'is_card_active', 'anytime_free_hours',
         ]
         read_only_fields = ['card_code']
 
