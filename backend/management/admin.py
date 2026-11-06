@@ -4,6 +4,8 @@ from django import forms
 from django.contrib import admin
 from django.contrib.auth.models import Group
 from django.contrib.auth.password_validation import validate_password
+from django.http import Http404
+from django.template.response import TemplateResponse
 from django.urls import path, reverse
 from django.utils import timezone
 from django.utils.html import format_html
@@ -619,6 +621,44 @@ class ParkingSessionAdmin(BaseAdmin):
         extra_context['currency_symbol'] = ParkingConfiguration.get_solo().currency_symbol
         extra_context['show_last_six_months_note'] = not has_date_filter
         return super().changelist_view(request, extra_context=extra_context)
+
+    def get_urls(self):
+        custom_urls = [
+            path('<path:object_id>/receipt/',
+                 self.admin_site.admin_view(self.receipt_view),
+                 name='management_parkingsession_receipt'),
+        ]
+        return custom_urls + super().get_urls()
+
+    def receipt_view(self, request, object_id):
+        """Printable receipt for a PAID session (opened from the change form)."""
+        session = self.get_object(request, object_id)
+        if session is None or not self.has_view_permission(request, session):
+            raise Http404("Parking session not found.")
+        if session.status != 'PAID':
+            raise Http404("Receipts can only be printed for paid sessions.")
+        config = ParkingConfiguration.get_solo()
+        total = session.calculated_charge or Decimal('0.00')
+        if session.lost_ticket:
+            # Lost ticket bills the flat fine instead of the parking fee.
+            gross = discount = adjustment = Decimal('0.00')
+        else:
+            gross = session.undiscounted_charge
+            discount = session.discount_value
+            # Minimum charge + round-up-to-5 applied on top of the discounted fee.
+            adjustment = total - session.charge_after_discount
+        return TemplateResponse(request, 'admin/management/parkingsession/receipt.html', {
+            'session': session,
+            'config': config,
+            'currency': config.currency_symbol,
+            'gross': gross,
+            'discount': discount,
+            'adjustment': adjustment,
+            'total': total,
+            'entry_time': timezone.localtime(session.entry_time),
+            'exit_time': timezone.localtime(session.exit_time) if session.exit_time else None,
+            'printed_at': timezone.localtime(),
+        })
 
     def display_undiscounted_charge(self, obj):
         currency = ParkingConfiguration.get_solo().currency_symbol

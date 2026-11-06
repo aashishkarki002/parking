@@ -1,0 +1,12 @@
+{% extends "admin/submit_line.html" %}
+{% load admin_urls %}
+
+{% block submit-row %}
+    {{ block.super }}
+    {% if original.status == 'PAID' %}
+        {% url 'parking_admin:management_parkingsession_receipt' original.pk|admin_urlquote as receipt_url %}
+        <div><button type="button" class="grp-button grp-default"
+                style="background:#2e7d32;border-color:#1b5e20;color:#fff;opacity:1;"
+                onclick="window.open('{{ receipt_url }}', '_blank', 'width=420,height=700');">Print Receipt</button></div>
+    {% endif %}
+{% endblock %}

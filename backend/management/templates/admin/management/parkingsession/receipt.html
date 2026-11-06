@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Receipt - {{ session.ticket_number }}</title>
+    <style>
+        @page { size: 80mm auto; margin: 4mm; }
+        * { box-sizing: border-box; }
+        body {
+            font-family: "Courier New", Courier, monospace;
+            font-size: 12px;
+            color: #000;
+            margin: 0;
+            padding: 8px;
+            width: 72mm;
+        }
+        .center { text-align: center; }
+        .company { font-size: 16px; font-weight: bold; margin-bottom: 2px; }
+        .title { font-size: 13px; font-weight: bold; letter-spacing: 2px; margin: 6px 0; }
+        hr { border: none; border-top: 1px dashed #000; margin: 6px 0; }
+        table { width: 100%; border-collapse: collapse; }
+        td { padding: 2px 0; vertical-align: top; }
+        td.r { text-align: right; white-space: nowrap; }
+        .total td { font-size: 15px; font-weight: bold; padding-top: 4px; }
+        .footer { margin-top: 10px; font-size: 11px; }
+        .actions { margin-top: 14px; text-align: center; }
+        .actions button { padding: 6px 14px; font-size: 13px; cursor: pointer; }
+        @media print { .actions { display: none; } }
+    </style>
+</head>
+<body>
+    <div class="center">
+        <div class="company">{{ config.company_name|default:"Parking" }}</div>
+        <div class="title">PARKING RECEIPT</div>
+    </div>
+    <hr>
+    <table>
+        <tr><td>Ticket</td><td class="r">{{ session.ticket_number }}</td></tr>
+        <tr><td>Vehicle</td><td class="r">{{ session.vehicle_type }}</td></tr>
+        {% if session.license_plate %}<tr><td>Plate</td><td class="r">{{ session.license_plate }}</td></tr>{% endif %}
+        {% if session.registered_staff_member %}<tr><td>Tenant</td><td class="r">{{ session.registered_staff_member }}</td></tr>{% endif %}
+    </table>
+    <hr>
+    <table>
+        <tr><td>Entry</td><td class="r">{{ entry_time|date:"Y-m-d H:i" }}</td></tr>
+        <tr><td>Exit</td><td class="r">{% if exit_time %}{{ exit_time|date:"Y-m-d H:i" }}{% else %}-{% endif %}</td></tr>
+        {% if session.duration_minutes is not None %}
+        <tr><td>Duration</td><td class="r">{{ session.duration_minutes }} min</td></tr>
+        {% endif %}
+    </table>
+    <hr>
+    <table>
+        {% if session.lost_ticket %}
+            <tr><td>Lost ticket fine</td><td class="r">{{ currency }} {{ total|floatformat:2 }}</td></tr>
+        {% else %}
+            <tr><td>Parking charge</td><td class="r">{{ currency }} {{ gross|floatformat:2 }}</td></tr>
+            {% if discount %}
+            <tr><td>Discount</td>
+                <td class="r">-{{ currency }} {{ discount|floatformat:2 }}</td></tr>
+            {% endif %}
+            {% if adjustment %}
+            <tr><td>Min. charge / rounding</td><td class="r">{% if adjustment < 0 %}-{% endif %}{{ currency }} {{ adjustment|floatformat:2|cut:"-" }}</td></tr>
+            {% endif %}
+        {% endif %}
+    </table>
+    <hr>
+    <table>
+        <tr class="total"><td>TOTAL PAID</td><td class="r">{{ currency }} {{ total|floatformat:2 }}</td></tr>
+        <tr><td>Payment</td><td class="r">{{ session.get_payment_method_display|default:"-" }}</td></tr>
+    </table>
+    <hr>
+    <div class="center footer">
+        Printed {{ printed_at|date:"Y-m-d H:i" }}<br>
+        Thank you!
+    </div>
+
+    <div class="actions">
+        <button onclick="window.print()">Print</button>
+        <button onclick="window.close()">Close</button>
+    </div>
+
+    <script>
+        window.addEventListener('load', function () { window.print(); });
+    </script>
+</body>
+</html>
