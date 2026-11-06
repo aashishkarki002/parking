@@ -655,10 +655,18 @@ class ParkingSessionAdmin(BaseAdmin):
             'discount': discount,
             'adjustment': adjustment,
             'total': total,
+            'duration': self._format_duration(session.duration_minutes),
             'entry_time': timezone.localtime(session.entry_time),
             'exit_time': timezone.localtime(session.exit_time) if session.exit_time else None,
             'printed_at': timezone.localtime(),
         })
+
+    @staticmethod
+    def _format_duration(minutes):
+        if minutes is None:
+            return None
+        hours, mins = divmod(minutes, 60)
+        return f"{hours}h {mins:02d}m" if hours else f"{mins} min"
 
     def display_undiscounted_charge(self, obj):
         currency = ParkingConfiguration.get_solo().currency_symbol
